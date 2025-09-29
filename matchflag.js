@@ -247,21 +247,159 @@
     }
     return target; // 못 찾으면 그대로(나중에 시트 없음 에러)
   }
+   
+// ✅ 교체할 내용 (objectsToAOA 아래의 saveAsOneWorkbook 내용 전체를 아래로 교체 - B패치)
+   function saveAsOneWorkbook(baseName, A_details, B_result /* {map, mis} 또는 null */) {
+     const passRows = A_details.filter(r => r.일치여부 === '일치');
+     const failRows = A_details.filter(r => r.일치여부 === '불일치');
+   
+     const wb = XLSX.utils.book_new();
+   
+     // A
+     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(A_details)), 'A_전체');
+     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(failRows)),  'A_불일치');
+     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(passRows)),  'A_일치');
+   
+     // B (있으면 추가)
+     if (B_result && B_result.map) {
+       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(B_result.map)), 'B_목록_전체');
+       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(B_result.mis)), 'B_목록_불일치');
+     }
+   
+     const outName = `${baseName}_일위대가 검사.xlsx`;
+     XLSX.writeFile(wb, outName);
+   }
 
-  // ===== 저장: 전체/불일치/일치 =====
-  function saveAsOneWorkbook(baseName, allRows) {
-    const passRows = allRows.filter(r => r.일치여부 === '일치');
-    const failRows = allRows.filter(r => r.일치여부 === '불일치');
-  
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(allRows)), 'A_전체');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(failRows)), 'A_불일치');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(passRows)), 'A_일치');
-  
-    const outName = `${baseName}_일위대가 검사.xlsx`;
-    XLSX.writeFile(wb, outName);
-    
+
+// ===== B: 일위대가목록 ↔ 일위대가 매핑 =====
+// 참고: 파이썬 run_check_B 동등화 (일위대가 참조 스캔 → 최근접 헤더행 키 매핑)  :contentReference[oaicite:1]{index=1}
+function runCheckB(wb) {
+  // 시트명 정규화 선택
+  const ulName = pickSheetByName(wb.SheetNames, '일위대가');
+  const lsName = pickSheetByName(wb.SheetNames, '일위대가목록');
+
+  const ulArr = sheetToAOA(wb, ulName);
+  const lsArr = sheetToAOA(wb, lsName);
+
+  // 일위대가: 필수 헤더 풀셋 (파이썬과 동일)
+  const ulHdr = findHeaderRowAndColsRequired(
+    ulArr,
+    ['품명','규격','단위','수량','합계 단가','합계금액','재료비 단가','재료비 금액','노무비 단가','노무비 금액','경비 단가','경비 금액','비고'],
+    40, 200
+  );
+  const COL = {
+    '품명': ulHdr.pos['품명'],
+    '규격': ulHdr.pos['규격'],
+    '단위': ulHdr.pos['단위'],
+    '수량': ulHdr.pos['수량']
+  };
+
+  // 목록: 필수 헤더
+  const lsHdr = findHeaderRowAndColsRequired(lsArr, ['코드','품명','규격'], 40, 200);
+
+  const wsUL = wb.Sheets[ulName];
+  const wsLS = wb.Sheets[lsName];
+  const ulRange = XLSX.utils.decode_range(wsUL['!ref']);
+  const lsRange = XLSX.utils.decode_range(wsLS['!ref']);
+
+  // 목록 키
+  const key_lst = (r) => {
+    const name = normSimple(lsArr[r]?.[lsHdr.pos['품명']]);
+    const spec = normSimple(lsArr[r]?.[lsHdr.pos['규격']]);
+    return `${name}|${spec}`.replace(/\|$/, '');
+  };
+
+  // "최근접 헤더" 정의 (파이썬과 동일한 규칙)
+  function header_row_nearest(rr) {
+    for (let k = rr - 1; k > ulHdr.headerRow; k--) {
+      const pname = String(ulArr[k]?.[COL['품명']] ?? '').trim();
+      if (!pname) continue;
+      const unit = ulArr[k]?.[COL['단위']];
+      const qty  = ulArr[k]?.[COL['수량']];
+      const blank = new Set([null, '', 0, '-', '—']);
+      if (!blank.has(unit) || !blank.has(qty)) continue;
+      // '합계' 포함 행은 제외
+      const s = pname.replace(/[\u3000 ]/g, '');
+      if (s.includes('합계')) continue;
+      return k; // AOA 인덱스(0-based)
+    }
+    return null;
   }
+
+  // 헤더 키 생성: 규격 없으면 '두 칸 이상 공백'으로 분리하여 앞 2토큰
+  function build_ul_header_key(r) {
+    if (r == null) return null;
+    let pname = normSimple(ulArr[r]?.[COL['품명']]);
+    let spec  = normSimple(ulArr[r]?.[COL['규격']]);
+    if (!spec && pname) {
+      const toks = (pname || '').split(/[ \u3000]{2,}/).map(t => t.trim()).filter(Boolean);
+      if (toks.length >= 2) { pname = toks[0]; spec = toks[1]; }
+    }
+    const key = `${pname ?? ''}|${spec ?? ''}`.replace(/\|$/, '');
+    return key || null;
+  }
+
+  // '일위대가' 참조 정규식 (파이썬과 동일 의미)
+  const UL_CELLREF_RE = /(?:'?)일위대가(?:'?)!\$?([A-Z]{1,3})\$?(\d+)/gi;
+
+  const mappings = [];
+  const mismatches = [];
+  let checked = 0;
+
+  for (let r = lsHdr.headerRow + 1; r <= lsRange.e.r; r++) {
+    const list_key = key_lst(r);
+    if (!list_key || list_key === 'null|null' || list_key === '|') continue;
+
+    const headerRows = new Set();
+    let fcount = 0;
+
+    // 목록 행 전체 수식 스캔
+    for (let c = lsRange.s.c; c <= lsRange.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = wsLS[addr];
+      const fml  = cell && typeof cell.f === 'string' ? cell.f : null;
+      if (!fml || !/일위대가/.test(fml)) continue;
+
+      let m; UL_CELLREF_RE.lastIndex = 0;
+      while ((m = UL_CELLREF_RE.exec(fml)) !== null) {
+        const rr = parseInt(m[2], 10); // 참조된 '일위대가' 행번호(1-based)
+        // AOA 인덱스로 변환
+        const rrIdx = rr - 1;
+        const hdr = header_row_nearest(rrIdx);
+        if (hdr != null) headerRows.add(hdr);
+        checked++;
+      }
+      fcount++;
+    }
+
+    const hdr_row = headerRows.size ? [...headerRows].sort((a,b)=>a-b)[0] : null;
+    const hdr_key = build_ul_header_key(hdr_row);
+
+    mappings.push({
+      "일위대가목록_행": r + 1, // 1-based
+      "일위대가목록_품명|규격": list_key,
+      "매핑_헤더행": hdr_row != null ? (hdr_row + 1) : null,
+      "매핑_헤더_품명|규격": hdr_key,
+      "참조셀_수": fcount
+    });
+
+    if (hdr_key && normKey(list_key) !== normKey(hdr_key)) {
+      mismatches.push({
+        "일위대가목록_행": r + 1,
+        "일위대가목록_품명|규격": list_key,
+        "매핑_헤더행": hdr_row != null ? (hdr_row + 1) : null,
+        "매핑_헤더_품명|규격": hdr_key
+      });
+    }
+  }
+
+  const summary = {
+    "B_참조셀": checked,
+    "B_매핑된_행": mappings.length,
+    "B_불일치": mismatches.length
+  };
+  return { summary, map: mappings, mis: mismatches };
+}
 
   // ===== 실행 =====
   async function run() {
@@ -273,14 +411,18 @@
       if (!f) throw new Error('엑셀 파일을 선택하세요.');
 
       const wb = await readWorkbook(f);
-      const { summary, details } = runCheckA(wb);
-
-      // 요약만 로그
-      log(`일위대가 검사: 참조 ${summary.A_검사한_참조}건, 일치 ${summary.A_일치}, 불일치 ${summary.A_불일치}`);
-
+      // A, B 동시 실행
+      const A = runCheckA(wb);
+      const B = runCheckB(wb);
+      
+      // 로그 요약
+      log(`일위대가 검사(A): 참조 ${A.summary.A_검사한_참조}건, 일치 ${A.summary.A_일치}, 불일치 ${A.summary.A_불일치}`);
+      log(`일위대가 목록 검사(B): 참조셀 ${B.summary.B_참조셀}, 매핑된 행 ${B.summary.B_매핑된_행}, 불일치 ${B.summary.B_불일치}`);
+      
       const base = f.name.replace(/\.[^.]+$/, '');
-      saveAsOneWorkbook(base, details);
-      log('엑셀 저장 완료: (한 파일, 시트 3장) A_전체 / A_불일치 / A_일치');
+      saveAsOneWorkbook(base, A.details, B);
+      log('엑셀 저장 완료: (한 파일, 시트 5장: A_전체/A_불일치/A_일치/B_목록_전체/B_목록_불일치)');
+ 
     } catch (e) {
       console.error(e);
       log(`ERROR: ${e.message || e}`);
@@ -292,3 +434,4 @@
     if (btn) btn.addEventListener('click', run);
   });
 })();
+
