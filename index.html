@@ -1,0 +1,59 @@
+<!doctype html>
+<p><a href="./matchflag.html">▶ Matchflag(다시트 교차검증) 페이지로 이동</a></p>
+
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>단가대비표 매칭 (브라우저 전용)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; }
+    body { margin: 24px; max-width: 980px; }
+    h1 { margin: 0 0 12px; }
+    .card { border: 1px solid #ddd; border-radius: 14px; padding: 16px; margin: 12px 0; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button { padding: 10px 16px; border-radius: 10px; border: 1px solid #ccc; cursor: pointer; }
+    .muted { color: #666; font-size: 14px; }
+    .log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#fafafa; padding:10px; border-radius:8px; border:1px solid #eee; }
+    .grid { display: grid; gap: 8px; }
+    label { font-weight: 600; }
+    input[type="text"] { padding: 8px; border-radius: 8px; border: 1px solid #ccc; width: 100%; }
+  </style>
+
+</head>
+<body>
+<script src="lib/xlsx.full.min.js"></script>
+<script defer src="nb2.js"></script>
+  <h1>단가대비표 매칭 (GitHub Pages / 브라우저 내 처리)</h1>
+  <p class="muted">두 엑셀 파일을 업로드하면 브라우저 안에서 비교 후 결과 엑셀을 다운로드합니다. 서버 전송 없음.</p>
+
+  <div class="card grid">
+    <div class="row">
+      <div>
+        <label>파일 A (예: 기계)</label>
+        <input id="fileA" type="file" accept=".xlsx,.xlsm,.xls" />
+      </div>
+      <div>
+        <label>파일 B (예: 토목)</label>
+        <input id="fileB" type="file" accept=".xlsx,.xlsm,.xls" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>시트명 (기본: 단가대비표)</label>
+        <input id="sheetName" type="text" placeholder="단가대비표" />
+      </div>
+      <div>
+        <label>유사도 임계값(%) (기본: 30)</label>
+        <input id="threshold" type="text" placeholder="30" />
+      </div>
+    </div>
+
+    <div>
+      <button id="runBtn">매칭 실행 → 결과 엑셀 다운로드</button>
+    </div>
+    <div id="log" class="log"></div>
+  </div>
+</body>
+</html>
