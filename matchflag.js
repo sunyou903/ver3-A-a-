@@ -397,15 +397,6 @@ function runCheckB(wb) {
         });
       }
 
-
-    if (hdr_key && normKey(list_key) !== normKey(hdr_key)) {
-      mismatches.push({
-        "일위대가목록_행": r + 1,
-        "일위대가목록_품명|규격": list_key,
-        "매핑_헤더행": hdr_row != null ? (hdr_row + 1) : null,
-        "매핑_헤더_품명|규격": hdr_key
-      });
-    }
   }
 
   const summary = {
@@ -449,5 +440,6 @@ function runCheckB(wb) {
     if (btn) btn.addEventListener('click', run);
   });
 })();
+
 
 
