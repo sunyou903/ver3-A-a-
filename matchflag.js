@@ -374,14 +374,29 @@ function runCheckB(wb) {
 
     const hdr_row = headerRows.size ? [...headerRows].sort((a,b)=>a-b)[0] : null;
     const hdr_key = build_ul_header_key(hdr_row);
+   const matchStatus = (!hdr_key)
+     ? "참조없음"
+     : (normKey(list_key) === normKey(hdr_key) ? "일치" : "불일치");
+   
+   mappings.push({
+     "일위대가목록_행": r + 1,
+     "일위대가목록_품명|규격": list_key,
+     "매핑_헤더행": hdr_row != null ? (hdr_row + 1) : null,
+     "매핑_헤더_품명|규격": hdr_key,
+     "참조셀_수": fcount,
+     "일치여부": matchStatus
+   });
 
-    mappings.push({
-      "일위대가목록_행": r + 1, // 1-based
-      "일위대가목록_품명|규격": list_key,
-      "매핑_헤더행": hdr_row != null ? (hdr_row + 1) : null,
-      "매핑_헤더_품명|규격": hdr_key,
-      "참조셀_수": fcount
-    });
+
+     if (matchStatus === "불일치") {
+        mismatches.push({
+          "일위대가목록_행": r + 1,
+          "일위대가목록_품명|규격": list_key,
+          "매핑_헤더행": hdr_row != null ? (hdr_row + 1) : null,
+          "매핑_헤더_품명|규격": hdr_key
+        });
+      }
+
 
     if (hdr_key && normKey(list_key) !== normKey(hdr_key)) {
       mismatches.push({
@@ -434,4 +449,5 @@ function runCheckB(wb) {
     if (btn) btn.addEventListener('click', run);
   });
 })();
+
 
