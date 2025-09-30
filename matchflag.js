@@ -249,25 +249,36 @@
   }
    
 // ✅ 교체할 내용 (objectsToAOA 아래의 saveAsOneWorkbook 내용 전체를 아래로 교체 - B패치)
-   function saveAsOneWorkbook(baseName, A_details, B_result /* {map, mis} 또는 null */) {
-     const passRows = A_details.filter(r => r.일치여부 === '일치');
-     const failRows = A_details.filter(r => r.일치여부 === '불일치');
+   // 기존: function saveAsOneWorkbook(baseName, A_details, B_result)
+   // 변경: C_result까지 받기
+   function saveAsOneWorkbook(baseName, A_details, B_result, C_result) {
+     const passA = A_details.filter(r => r.일치여부 === '일치');
+     const failA = A_details.filter(r => r.일치여부 === '불일치');
    
      const wb = XLSX.utils.book_new();
    
      // A
      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(A_details)), 'A_전체');
-     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(failRows)),  'A_불일치');
-     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(passRows)),  'A_일치');
+     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(failA)),  'A_불일치');
+     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(passA)),  'A_일치');
    
-     // B (있으면 추가)
+     // B
      if (B_result && B_result.map) {
        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(B_result.map)), 'B_목록_전체');
        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(B_result.mis)), 'B_목록_불일치');
      }
    
-     const outName = `${baseName}_일위대가 검사.xlsx`;
-     XLSX.writeFile(wb, outName);
+     // C (전체/불일치/일치)
+     if (C_result && C_result.details) {
+       const allC = C_result.details;
+       const badC = allC.filter(r => r.일치여부 === '불일치');
+       const okC  = allC.filter(r => r.일치여부 === '일치');
+       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(allC)), 'C_공종_전체');
+       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(badC)), 'C_공종_불일치');
+       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objectsToAOA(okC)),  'C_공종_일치');
+     }
+   
+     XLSX.writeFile(wb, `${baseName}_일위대가 검사.xlsx`);
    }
 
 
@@ -407,6 +418,133 @@ function runCheckB(wb) {
   return { summary, map: mappings, mis: mismatches };
 }
 
+
+
+   // ===== C: 공종별내역서 — 외부시트 참조 비교 (원본 PY 동등화) =====
+   // 참고: '공종별내역서' 각 행에서 외부 시트 참조를 모아 대표(최빈 (시트,행))의 키와 비교.
+   // 외부참조가 없고 '합계 단가'가 수식이 아닌 숫자(0이 아님)이면 "값 직접입력" → 불일치. :contentReference[oaicite:1]{index=1}
+   function runCheckC(wb) {
+     const srcName = pickSheetByName(wb.SheetNames, '공종별내역서');
+     const arr = sheetToAOA(wb, srcName);
+     const ws = wb.Sheets[srcName];
+   
+     // 필수 헤더: 품명, 규격, 합계 단가  :contentReference[oaicite:2]{index=2}
+     const hdr = findHeaderRowAndColsRequired(arr, ['품명','규격','합계 단가']);
+     const HR = hdr.headerRow;
+     const POS = hdr.pos;
+   
+     // 행 키: (품명|규격)
+     const keyW = (r) => {
+       const name = normSimple(arr[r]?.[POS['품명']]);
+       const spec = normSimple(arr[r]?.[POS['규격']]);
+       return `${name}|${spec}`;
+     };
+   
+     // 범용 외부참조 파서: '시트명'!$A$1 또는 시트명!A1  :contentReference[oaicite:3]{index=3}
+     const SHEET_REF_RE = /(?:'([^']+)'|([^'!:]+))!\$?([A-Z]{1,3})\$?(\d+)/gi;
+   
+     // 대상 시트에서 같은 행의 (품명|규격) 키 얻기  :contentReference[oaicite:4]{index=4}
+     function getKeyFromSheet(sheetName, rownum) {
+       if (!wb.Sheets[sheetName]) return null;
+       const a2 = sheetToAOA(wb, sheetName);
+       let hr, pos;
+       try {
+         const got = findHeaderRowAndColsRequired(a2, ['품명','규격']);
+         hr = got.headerRow; pos = got.pos;
+       } catch { return null; }
+       const r = Number(rownum) - 1; // AOA index
+       if (r <= hr || r >= a2.length) return null;
+       const name = normSimple(a2[r]?.[pos['품명']]);
+       const spec = normSimple(a2[r]?.[pos['규격']]);
+       return `${name}|${spec}`;
+     }
+   
+     const rng = XLSX.utils.decode_range(ws['!ref']);
+     const records = [];
+     let rowsWithRefs = 0;
+     let cntDirectValue = 0;
+   
+     for (let r = HR + 1; r <= rng.e.r; r++) {
+       const wkey = keyW(r);
+       if (wkey === 'null|null' || wkey === 'None|None') continue;
+   
+       // 행 내 모든 셀의 수식에서 외부시트 참조 수집(자기 시트 제외)  :contentReference[oaicite:5]{index=5}
+       const refs = [];
+       for (let c = rng.s.c; c <= rng.e.c; c++) {
+         const addr = XLSX.utils.encode_cell({ r, c });
+         const cell = ws[addr];
+         const fml = cell && typeof cell.f === 'string' ? cell.f : null;
+         if (!fml) continue;
+         let m;
+         SHEET_REF_RE.lastIndex = 0;
+         while ((m = SHEET_REF_RE.exec(fml)) !== null) {
+           const qsheet = m[1], bsheet = m[2], row = m[4];
+           let target = String(qsheet || bsheet || '').replace(/^\s*[=+]/,'').trim().replace(/^'|'+$/g,'');
+           target = target.replace(/.*\(/,''); // TRUNC(시트!A1) 보호  (PY와 동등 아이디어) :contentReference[oaicite:6]{index=6}
+           if (!target || target === srcName) continue;
+           refs.push([target, parseInt(row,10)]);
+         }
+       }
+   
+       if (refs.length) {
+         // 대표 참조: 최빈 (시트,행)  :contentReference[oaicite:7]{index=7}
+         rowsWithRefs += 1;
+         const freq = new Map();
+         for (const [sn, rr] of refs) {
+           const k = `${sn}|${rr}`;
+           freq.set(k, (freq.get(k) || 0) + 1);
+         }
+         let best = null, bestCnt = -1;
+         for (const [k, v] of freq) if (v > bestCnt) { best = k; bestCnt = v; }
+         const [repSheet, repRowStr] = (best || '').split('|');
+         const repRow = parseInt(repRowStr,10);
+         const tkey = getKeyFromSheet(repSheet, repRow) || '';
+         const match = (normKey(wkey) === normKey(tkey)) ? '일치' : '불일치';  :contentReference[oaicite:8]{index=8}
+   
+         records.push({
+           "행": r+1,  // 1-based 표시
+           "참조유형": `${repSheet} 참조`,
+           "공종_키(품명|규격)": wkey,
+           "참조_키(품명|규격)": tkey,
+           "대표참조시트": repSheet,
+           "대표참조행": repRow,
+           "일치여부": match
+         });
+         continue;
+       }
+   
+       // 외부참조 없음 → '합계 단가' 직접입력 검사 (수식 아님 + 숫자 + 0 아님) :contentReference[oaicite:9]{index=9}
+       const priceCol = POS['합계 단가'];
+       const addr = XLSX.utils.encode_cell({ r, c: priceCol });
+       const cell = ws[addr];
+       const isFormula = cell && typeof cell.f === 'string';
+       const val = cell ? cell.v : null;
+       const isNum = typeof val === 'number' && Number.isFinite(val);
+       const nonzero = isNum && Math.abs(val) > 1e-9;
+       if (!isFormula && nonzero) {
+         records.push({
+           "행": r+1, "참조유형": "값 직접입력",
+           "공종_키(품명|규격)": wkey,
+           "참조_키(품명|규격)": "",
+           "대표참조시트": "", "대표참조행": "",
+           "일치여부": "불일치",
+           "입력값(합계단가)": val
+         });
+         cntDirectValue += 1;
+       }
+     }
+   
+     // 요약  :contentReference[oaicite:10]{index=10}
+     const df = records; // JS에서는 객체배열
+     const sum = {
+       "C_검사대상_행수(직접참조 보유)": rowsWithRefs,
+       "C_일치": df.filter(x => x.일치여부 === '일치').length,
+       "C_불일치": df.filter(x => x.일치여부 === '불일치').length,
+       "C_값직접입력_불일치": cntDirectValue
+     };
+     return { summary: sum, details: records };
+   }
+
   // ===== 실행 =====
   async function run() {
     try {
@@ -420,14 +558,17 @@ function runCheckB(wb) {
       // A, B 동시 실행
       const A = runCheckA(wb);
       const B = runCheckB(wb);
+      const C = runCheckC(wb);
       
       // 로그 요약
-      log(`일위대가 검사(A): 참조 ${A.summary.A_검사한_참조}건, 일치 ${A.summary.A_일치}, 불일치 ${A.summary.A_불일치}`);
-      log(`일위대가 목록 검사(B): 참조셀 ${B.summary.B_참조셀}, 매핑된 행 ${B.summary.B_매핑된_행}, 불일치 ${B.summary.B_불일치}`);
+      // 로그 요약
+      log(`A: 참조 ${A.summary.A_검사한_참조}건, 일치 ${A.summary.A_일치}, 불일치 ${A.summary.A_불일치}`);
+      log(`B: 참조셀 ${B.summary.B_참조셀}, 매핑된 행 ${B.summary.B_매핑된_행}, 불일치 ${B.summary.B_불일치}`);
+      log(`C: 대상(직접참조 보유) ${C.summary["C_검사대상_행수(직접참조 보유)"]}, 일치 ${C.summary.C_일치}, 불일치 ${C.summary.C_불일치}, 값직접입력 불일치 ${C.summary["C_값직접입력_불일치"]}`);
       
       const base = f.name.replace(/\.[^.]+$/, '');
-      saveAsOneWorkbook(base, A.details, B);
-      log('엑셀 저장 완료: (한 파일, 시트 5장: A_전체/A_불일치/A_일치/B_목록_전체/B_목록_불일치)');
+      saveAsOneWorkbook(base, A.details, B, C);
+      log('엑셀 저장 완료: 한 파일에 A(3) + B(2) + C(3) 시트');
  
     } catch (e) {
       console.error(e);
@@ -440,6 +581,7 @@ function runCheckB(wb) {
     if (btn) btn.addEventListener('click', run);
   });
 })();
+
 
 
 
