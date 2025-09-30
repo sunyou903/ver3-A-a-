@@ -546,41 +546,58 @@ function runCheckB(wb) {
    }
 
   // ===== 실행 =====
-  async function run() {
-    try {
-      document.getElementById('mfLog').textContent = '';
-      await waitForXLSX();
+   // ===== 실행 =====
+async function run() {
+  try {
+    const logEl = document.getElementById('mfLog');
+    if (logEl) logEl.textContent = '';
 
-      const f = document.getElementById('mfFile').files[0];
-      if (!f) throw new Error('엑셀 파일을 선택하세요.');
+    // 부팅 확인
+    console.log('[matchflag] run() called');
+    if (!window.XLSX) throw new Error('XLSX not loaded');
 
-      const wb = await readWorkbook(f);
-      // A, B 동시 실행
-      const A = runCheckA(wb);
-      const B = runCheckB(wb);
-      const C = runCheckC(wb);
-      
-      // 로그 요약
-      // 로그 요약
+    const f = document.getElementById('mfFile')?.files?.[0];
+    if (!f) throw new Error('엑셀 파일을 선택하세요.');
+
+    const wb = await readWorkbook(f);
+
+    // A는 필수
+    const A = typeof runCheckA === 'function' ? runCheckA(wb) : null;
+    if (!A) throw new Error('runCheckA가 없습니다.');
+
+    // B/C는 있으면 실행
+    const B = (typeof runCheckB === 'function') ? runCheckB(wb) : null;
+    const C = (typeof runCheckC === 'function') ? runCheckC(wb) : null;
+
+    // 요약 로그(요청대로 요약만)
+    if (A?.summary) {
       log(`A: 참조 ${A.summary.A_검사한_참조}건, 일치 ${A.summary.A_일치}, 불일치 ${A.summary.A_불일치}`);
-      log(`B: 참조셀 ${B.summary.B_참조셀}, 매핑된 행 ${B.summary.B_매핑된_행}, 불일치 ${B.summary.B_불일치}`);
-      log(`C: 대상(직접참조 보유) ${C.summary["C_검사대상_행수(직접참조 보유)"]}, 일치 ${C.summary.C_일치}, 불일치 ${C.summary.C_불일치}, 값직접입력 불일치 ${C.summary["C_값직접입력_불일치"]}`);
-      
-      const base = f.name.replace(/\.[^.]+$/, '');
-      saveAsOneWorkbook(base, A.details, B, C);
-      log('엑셀 저장 완료: 한 파일에 A(3) + B(2) + C(3) 시트');
- 
-    } catch (e) {
-      console.error(e);
-      log(`ERROR: ${e.message || e}`);
     }
-  }
+    if (B?.summary) {
+      log(`B: 참조셀 ${B.summary.B_참조셀}, 매핑된 행 ${B.summary.B_매핑된_행}, 불일치 ${B.summary.B_불일치}`);
+    }
+    if (C?.summary) {
+      log(`C: 대상(직접참조) ${C.summary["C_검사대상_행수(직접참조 보유)"]}, 일치 ${C.summary.C_일치}, 불일치 ${C.summary.C_불일치}, 값직접입력 ${C.summary["C_값직접입력_불일치"]}`);
+    }
 
-  window.addEventListener('DOMContentLoaded', () => {
-    const btn = document.getElementById('mfRun');
-    if (btn) btn.addEventListener('click', run);
-  });
+    const base = f.name.replace(/\.[^.]+$/, '');
+    // 저장 함수는 한 곳에서 처리 (B/C 없어도 null로 넘겨서 시트 스킵)
+    saveAsOneWorkbook(base, A.details, B, C);
+    log('엑셀 저장 완료');
+  } catch (e) {
+    console.error(e);
+    log(`ERROR: ${e.message || e}`);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  console.log('[matchflag] DOMContentLoaded');
+  const btn = document.getElementById('mfRun');
+  if (!btn) { console.error('mfRun 버튼을 찾을 수 없습니다.'); return; }
+  btn.addEventListener('click', run);
+});
 })();
+
 
 
 
