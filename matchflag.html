@@ -35,5 +35,28 @@
   <script src="lib/xlsx.full.min.js"></script>
   <!-- Matchflag 로직 -->
   <script defer src="matchflag.js"></script>
+
+  <script>
+  (function(){
+    function appendLog(msg){
+      var el = document.getElementById('mfLog');
+      if (!el) return;
+      el.textContent += (el.textContent ? '\n' : '') + msg;
+    }
+    function onFileChange(e){
+      var f = e.target.files && e.target.files[0];
+      if (f) {
+        appendLog('"' + f.name + '" 파일을 확인했습니다.');
+      } else {
+        appendLog('파일 선택이 취소되었습니다.');
+      }
+    }
+    document.addEventListener('DOMContentLoaded', function(){
+      var inp = document.getElementById('mfFile');
+      if (inp) inp.addEventListener('change', onFileChange);
+    });
+  })();
+  </script>
+
 </body>
 </html>
