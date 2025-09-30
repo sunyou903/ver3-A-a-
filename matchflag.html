@@ -57,6 +57,46 @@
     });
   })();
   </script>
+    <script>
+  (function(){
+    function appendLog(msg){
+      var el = document.getElementById('mfLog');
+      if (!el) return;
+      el.textContent += (el.textContent ? '\n' : '') + msg;
+    }
+  
+    document.addEventListener('DOMContentLoaded', function(){
+      appendLog('페이지 로드 완료. XLSX=' + (window.XLSX ? 'OK' : '미로드'));
+  
+      var inp = document.getElementById('mfFile');
+      if (inp) {
+        inp.addEventListener('change', function(e){
+          var f = e.target.files && e.target.files[0];
+          appendLog(f ? ('"' + f.name + '" 파일을 확인했습니다.') : '파일 선택이 취소되었습니다.');
+        });
+      } else {
+        appendLog('mfFile 입력을 찾지 못했습니다.');
+      }
+  
+      var btn = document.getElementById('mfRun');
+      if (btn) {
+        btn.addEventListener('click', function(){
+          appendLog('A검사 실행 버튼 클릭을 확인했습니다.');
+          if (typeof window.run === 'function') {
+            appendLog('전역 run()을 호출합니다…');
+            try { window.run(); } catch(e){ appendLog('run() 오류: ' + (e.message || e)); }
+          } else {
+            appendLog('전역 run() 함수를 찾을 수 없습니다 (JS에서 내부 바인딩만 있는 상태일 수 있음).');
+          }
+        });
+      } else {
+        appendLog('mfRun 버튼을 찾지 못했습니다.');
+      }
+    });
+  })();
+  </script>
 
+
+  
 </body>
 </html>
