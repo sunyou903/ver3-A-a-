@@ -162,10 +162,22 @@
   }
 
   // ------------------------------
-  // 검사 A: 일위대가 ↔ (단가대비표|일위대가목록)
-  // - 일위대가의 각 행 수식에서 외부참조 대표(최빈) 추출 → 참조 시트에서 키 비교
-  // - 참조 없음 && 수량 값 존재(0 아님) → 불일치
+  // 검사 A: 일위대가 ↔ (단가대비표|일위대가목록) — "행 단위" 집계로 수정
+  // - 각 데이터 행에서 특정 열 집합만 스캔하여 외부참조를 모으고 대표(최빈) 1개로 판정
+  // - 참조 없음 && 수량 값이 상수(수식 아님) && 0이 아니면 불일치
   // ------------------------------
+  function collectRowRefs(ws, rowR0, colsToScan, selfName){
+    const refs = [];
+    for (const C of colsToScan){
+      const a1 = XLSX.utils.encode_cell({r:rowR0, c:C});
+      const f = safeGet(ws[a1],'f');
+      if (!f) continue;
+      const part = collectExternalRefs(f, selfName);
+      if (part && part.length) refs.push(...part);
+    }
+    return refs;
+  }
+
   function checkA(wb){
     const S_A = getSheetCaseInsensitive(wb,'일위대가');
     const S_B = getSheetCaseInsensitive(wb,'단가대비표');
@@ -173,78 +185,64 @@
     const out = [];
     if (!S_A || !(S_B||S_C)) return {name:'A', rows:[], summary:{note:'필수 시트 미존재'}};
 
-    // 헤더 탐색(공통 최소 요구)
     const wantsA = ['품명','규격','단위','수량'];
     const wantsBC = ['품명','규격','단위'];
     const Adef = findHeaderRowAndCols(S_A, wantsA);
     const Bdef = S_B ? findHeaderRowAndCols(S_B, wantsBC) : null;
     const Cdef = S_C ? findHeaderRowAndCols(S_C, wantsBC) : null;
-
     if (!Adef) return {name:'A', rows:[], summary:{note:'일위대가 헤더 미검출'}};
+
     const Amap = buildRowKeyMap(S_A, Adef.headerRow, Adef.colMap, {left:'품명', right:'규격'});
     const Bmap = S_B && Bdef ? buildRowKeyMap(S_B, Bdef.headerRow, Bdef.colMap, {left:'품명', right:'규격'}) : new Map();
     const Cmap = S_C && Cdef ? buildRowKeyMap(S_C, Cdef.headerRow, Cdef.colMap, {left:'품명', right:'규격'}) : new Map();
 
-    // 수량 열 A1 주소
-    const qtyCol = Adef.colMap['수량'];
-
     const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_A) || '일위대가';
 
-    eachCell(S_A, (cell, A1, R, C)=>{
-      const excelRow = R+1; if (excelRow<=Adef.headerRow+1) return; // 데이터 영역만
-      const myKey = Amap.get(excelRow); if (!myKey) return;
+    // 스캔할 열 집합: 헤더 오른쪽 5~35열 정도의 범용 영역 + 수량열 포함(많은 파일에서 수식이 해당 영역에 위치)
+    const range = XLSX.utils.decode_range(S_A['!ref']);
+    const colsToScan = new Set();
+    const startC = Math.max(0, Math.min(Adef.colMap['수량'] ?? 0, 5));
+    for (let c = startC; c <= Math.min(range.e.c, 45); c++) colsToScan.add(c);
+    if (typeof Adef.colMap['수량']==='number') colsToScan.add(Adef.colMap['수량']);
 
-      const f = safeGet(cell,'f');
-      const refs = collectExternalRefs(f, selfName);
+    // 행 단위 집계
+    for (let R = Adef.headerRow+1; R <= range.e.r; R++){
+      const excelRow = R+1;
+      const myKey = Amap.get(excelRow);
+      if (!myKey) continue;
+
+      const refs = collectRowRefs(S_A, R, [...colsToScan], selfName);
       const rep = mostFrequentRef(refs);
 
       let status = '일치', refKey = '', refSheet = '', refRow = '';
       if (rep){
         refSheet = rep.sheet; refRow = rep.row;
-        const targetMap = (refSheet.toLowerCase()==='단가대비표')? Bmap : (refSheet.toLowerCase()==='일위대가목록')? Cmap : null;
+        const targetMap = (rep.sheet.toLowerCase()==='단가대비표')? Bmap : (rep.sheet.toLowerCase()==='일위대가목록')? Cmap : null;
         refKey = targetMap? (targetMap.get(rep.row)||'') : '';
         if (!refKey || normWS(refKey.split('|')[0])!==normWS(myKey.split('|')[0]) || normWS(refKey.split('|')[1])!==normWS(myKey.split('|')[1])){
           status = '불일치';
         }
       } else {
-        // 참조 없음: 수량 값이 있고 0이 아니면 불일치
-        if (C===qtyCol){ /* 수량셀 그 자체는 스킵 */ }
-        const qtyA1 = XLSX.utils.encode_cell({r:R, c:qtyCol});
-        const qtyCell = S_A[qtyA1];
-        const qtyVal = safeGet(qtyCell,'v');
-        const qtyF = safeGet(qtyCell,'f');
-        const qn = Number(qtyVal);
-        if (!qtyF && Number.isFinite(qn) && Math.abs(qn) > 0){ status = '불일치'; }
+        // 참조 없음: 수량 값이 상수이고 0이 아니면 불일치
+        const qtyCol = Adef.colMap['수량'];
+        if (typeof qtyCol === 'number'){
+          const qtyA1 = XLSX.utils.encode_cell({r:R, c:qtyCol});
+          const qcell = S_A[qtyA1];
+          const qF = safeGet(qcell,'f');
+          const qV = Number(safeGet(qcell,'v'));
+          if (!qF && Number.isFinite(qV) && Math.abs(qV) > 0) status = '불일치';
+        }
       }
 
       out.push({시트:'일위대가', 행:excelRow, 키:myKey, 참조시트:refSheet, 참조행:refRow, 참조키:refKey, 결과:status});
-    });
+    }
 
     return summarize('A', out);
   }
 
   // ------------------------------
-  // 검사 B: 일위대가목록 ↔ 일위대가(헤더 역할 행 근접)
-  // - 목록의 각 행 수식에서 일위대가 시트 참조 추출 → 참조 행 주변에서 "헤더 역할" 행을 찾아 대표 키
+  // 검사 B: 일위대가목록 ↔ 일위대가 — "행 단위"로 참조셀 집계, 근접 헤더 매핑 유지
   // ------------------------------
-  function isHeaderLikeRow(ws, rowIndex, pos){
-    // 품명은 있고, 단위/수량은 비거나 0인 행을 헤더 유사로 간주
-    const a1 = (c)=>XLSX.utils.encode_cell({r:rowIndex, c});
-    const v = (c)=> safeGet(ws[a1(c)],'v');
-    const f = (c)=> safeGet(ws[a1(c)],'f');
-    const hasName = !!normWS(v(pos['품명']));
-    const unitEmpty = !normWS(v(pos['단위'])) && !f(pos['단위']);
-    const qtyEmpty = !normWS(v(pos['수량'])) && !f(pos['수량']);
-    return hasName && unitEmpty && qtyEmpty;
-  }
-
-  function nearestHeaderLikeUp(ws, startRow, pos, searchLimit=20){
-    for (let r=startRow; r>=Math.max(0,startRow-searchLimit); r--){
-      if (isHeaderLikeRow(ws, r, pos)) return r;
-    }
-    return null;
-  }
-
   function checkB(wb){
     const S_C = getSheetCaseInsensitive(wb,'일위대가목록');
     const S_A = getSheetCaseInsensitive(wb,'일위대가');
@@ -258,34 +256,35 @@
 
     const Cmap = buildRowKeyMap(S_C, Cdef.headerRow, Cdef.colMap, {left:'품명', right:'규격'});
     const Amap = buildRowKeyMap(S_A, Adef.headerRow, Adef.colMap, {left:'품명', right:'규격'});
-    const sName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_C) || '일위대가목록';
+    const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_C) || '일위대가목록';
 
-    eachCell(S_C, (cell, A1, R, C)=>{
-      const excelRow = R+1; if (excelRow<=Cdef.headerRow+1) return;
-      const myKey = Cmap.get(excelRow); if (!myKey) return;
-      const f = safeGet(cell,'f'); const refs = collectExternalRefs(f, sName);
-      const onlyA = refs.filter(r => r.sheet.toLowerCase()==='일위대가');
-      if (!onlyA.length) return; // 일위대가 미참조 행은 스킵
-      const rep = mostFrequentRef(onlyA); if (!rep) return;
+    const range = XLSX.utils.decode_range(S_C['!ref']);
+    // 목록은 보통 우측 금액/단가 영역에 참조 수식이 몰림 → 헤더 기준 우측 5~45열 스캔
+    const colsToScan = [];
+    for (let c = Math.min(5, range.e.c); c <= Math.min(45, range.e.c); c++) colsToScan.push(c);
 
-      // 참조된 행의 근처에서 헤더 역할 행을 위로 탐색
-      const headerRowLike = nearestHeaderLikeUp(S_A, rep.row-1, Adef.colMap, 30);
+    for (let R = Cdef.headerRow+1; R <= range.e.r; R++){
+      const excelRow = R+1;
+      const myKey = Cmap.get(excelRow); if (!myKey) continue;
+      const refsAll = collectRowRefs(S_C, R, colsToScan, selfName);
+      const refsToA = refsAll.filter(r => r.sheet.toLowerCase()==='일위대가');
+      if (!refsToA.length) continue; // 참조 없는 행은 스킵
+      const rep = mostFrequentRef(refsToA); if (!rep) continue;
+      const headerRowLike = nearestHeaderLikeUp(S_A, rep.row-1, Adef.colMap, 40);
       const refKey = headerRowLike!=null ? Amap.get(headerRowLike+1) : (Amap.get(rep.row) || '');
       const status = (!refKey || normWS(refKey)!==normWS(myKey))? '불일치':'일치';
       out.push({시트:'일위대가목록', 행:excelRow, 키:myKey, 참조시트:'일위대가', 참조행:rep.row, 참조키:refKey||'', 결과:status});
-    });
+    }
 
     return summarize('B', out);
   }
 
   // ------------------------------
-  // 검사 C: 공종별내역서 — 외부참조/직접입력 판정
-  // - 외부참조 대표(최빈) ↔ 키 비교
-  // - 외부참조 전혀 없고 합계단가가 상수(수식 아님) & 0이 아니면 불일치
+  // 검사 C: 공종별내역서 — 행 단위로 대표 참조, 합계단가 상수 판정은 해당 열만 체크
   // ------------------------------
   function checkC(wb){
     const S = getSheetCaseInsensitive(wb,'공종별내역서');
-    const T = getSheetCaseInsensitive(wb,'단가대비표'); // 비교 대상 기본
+    const T = getSheetCaseInsensitive(wb,'단가대비표');
     const out = [];
     if (!S || !T) return {name:'C', rows:[], summary:{note:'필수 시트 미존재'}};
 
@@ -299,28 +298,39 @@
     const Tmap = buildRowKeyMap(T, Tdef.headerRow, Tdef.colMap, {left:'품명', right:'규격'});
     const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별내역서';
 
-    eachCell(S, (cell, A1, R, C)=>{
-      const excelRow = R+1; if (excelRow<=Sdef.headerRow+1) return;
-      const myKey = Smap.get(excelRow); if (!myKey) return;
-      const f = safeGet(cell,'f'); const refs = collectExternalRefs(f, selfName);
+    const range = XLSX.utils.decode_range(S['!ref']);
+    // 합계단가 열과 그 주변 우측 금액열 위주로 스캔(불필요한 셀 스캔 제거)
+    const colsToScan = new Set();
+    const sumCol = Sdef.colMap['합계단가'];
+    if (typeof sumCol==='number'){
+      for (let c=Math.max(0,sumCol-3); c<=Math.min(range.e.c, sumCol+6); c++) colsToScan.add(c);
+    } else {
+      for (let c=10; c<=Math.min(range.e.c, 45); c++) colsToScan.add(c);
+    }
+
+    for (let R = Sdef.headerRow+1; R <= range.e.r; R++){
+      const excelRow = R+1;
+      const myKey = Smap.get(excelRow); if (!myKey) continue;
+      const refs = collectRowRefs(S, R, [...colsToScan], selfName);
       const rep = mostFrequentRef(refs);
-      let status = '일치', refKey='', refSheet='', refRow='';
+      let status='일치', refKey='', refSheet='', refRow='';
       if (rep){
         refSheet = rep.sheet; refRow = rep.row;
         const tKey = (rep.sheet.toLowerCase()==='단가대비표') ? Tmap.get(rep.row) : '';
         refKey = tKey||'';
         if (!tKey || normWS(tKey)!==normWS(myKey)) status='불일치';
       } else {
-        // 외부참조 없음 → 합계단가가 값(수식 아님)이고 0이 아니면 불일치
-        const sumCol = Sdef.colMap['합계단가'];
-        const sumA1 = XLSX.utils.encode_cell({r:R, c:sumCol});
-        const scell = S[sumA1];
-        const sF = safeGet(scell,'f');
-        const sV = Number(safeGet(scell,'v'));
-        if (!sF && Number.isFinite(sV) && Math.abs(sV)>0){ status='불일치'; }
+        // 외부참조 없음 → 합계단가 셀만 검사하여 상수 여부 판단
+        if (typeof sumCol==='number'){
+          const sumA1 = XLSX.utils.encode_cell({r:R, c:sumCol});
+          const scell = S[sumA1];
+          const sF = safeGet(scell,'f');
+          const sV = Number(safeGet(scell,'v'));
+          if (!sF && Number.isFinite(sV) && Math.abs(sV)>0){ status='불일치'; }
+        }
       }
       out.push({시트:'공종별내역서', 행:excelRow, 키:myKey, 참조시트:refSheet, 참조행:refRow, 참조키:refKey||'', 결과:status});
-    });
+    }
 
     return summarize('C', out);
   }
@@ -498,3 +508,4 @@
     }
   };
 })();
+
