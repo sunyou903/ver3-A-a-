@@ -178,67 +178,104 @@
     return refs;
   }
 
-  function checkA(wb){
-    const S_A = getSheetCaseInsensitive(wb,'일위대가');
-    const S_B = getSheetCaseInsensitive(wb,'단가대비표');
-    const S_C = getSheetCaseInsensitive(wb,'일위대가목록');
-    const out = [];
-    if (!S_A || !(S_B||S_C)) return {name:'A', rows:[], summary:{note:'필수 시트 미존재'}};
+function checkA(wb){
+  const S_A = getSheetCaseInsensitive(wb,'일위대가');
+  const S_B = getSheetCaseInsensitive(wb,'단가대비표');
+  const S_C = getSheetCaseInsensitive(wb,'일위대가목록');
+  const out = [];
+  if (!S_A || !(S_B || S_C)) return {name:'A', rows:[], summary:{note:'필수 시트 미존재'}};
 
-    const wantsA = ['품명','규격','단위','수량'];
-    const wantsBC = ['품명','규격','단위'];
-    const Adef = findHeaderRowAndCols(S_A, wantsA);
-    const Bdef = S_B ? findHeaderRowAndCols(S_B, wantsBC) : null;
-    const Cdef = S_C ? findHeaderRowAndCols(S_C, wantsBC) : null;
-    if (!Adef) return {name:'A', rows:[], summary:{note:'일위대가 헤더 미검출'}};
+  // 헤더 및 키 맵
+  const Adef = findHeaderRowAndCols(S_A, ['품명','규격','단위','수량']);
+  const Bdef = S_B ? findHeaderRowAndCols(S_B, ['품명','규격','단위']) : null;
+  const Cdef = S_C ? findHeaderRowAndCols(S_C, ['품명','규격'])           : null;
+  if (!Adef) return {name:'A', rows:[], summary:{note:'일위대가 헤더 미검출'}};
 
-    const Amap = buildRowKeyMap(S_A, Adef.headerRow, Adef.colMap, {left:'품명', right:'규격'});
-    const Bmap = S_B && Bdef ? buildRowKeyMap(S_B, Bdef.headerRow, Bdef.colMap, {left:'품명', right:'규격'}) : new Map();
-    const Cmap = S_C && Cdef ? buildRowKeyMap(S_C, Cdef.headerRow, Cdef.colMap, {left:'품명', right:'규격'}) : new Map();
+  const Amap = buildRowKeyMap(S_A, Adef.headerRow, Adef.colMap, {left:'품명', right:'규격'});
+  const Bmap = (S_B && Bdef) ? buildRowKeyMap(S_B, Bdef.headerRow, Bdef.colMap, {left:'품명', right:'규격'}) : new Map();
+  const Cmap = (S_C && Cdef) ? buildRowKeyMap(S_C, Cdef.headerRow, Cdef.colMap, {left:'품명', right:'규격'}) : new Map();
 
-    const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_A) || '일위대가';
+  // 행 전체 열 스캔
+  const range = XLSX.utils.decode_range(S_A['!ref']);
+  const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_A) || '일위대가';
 
-    // 스캔할 열 집합: 헤더 오른쪽 5~35열 정도의 범용 영역 + 수량열 포함(많은 파일에서 수식이 해당 영역에 위치)
-    const range = XLSX.utils.decode_range(S_A['!ref']);
-    const colsToScan = new Set();
-    const startC = Math.max(0, Math.min(Adef.colMap['수량'] ?? 0, 5));
-    for (let c = startC; c <= Math.min(range.e.c, 45); c++) colsToScan.add(c);
-    if (typeof Adef.colMap['수량']==='number') colsToScan.add(Adef.colMap['수량']);
+  for (let R = Adef.headerRow+1; R <= range.e.r; R++){
+    const excelRow = R+1;
+    const myKey = Amap.get(excelRow);
+    if (!myKey) continue;
 
-    // 행 단위 집계
-    for (let R = Adef.headerRow+1; R <= range.e.r; R++){
-      const excelRow = R+1;
-      const myKey = Amap.get(excelRow);
-      if (!myKey) continue;
+    const pnameA1 = XLSX.utils.encode_cell({r:R, c:Adef.colMap['품명']});
+    const gnameA1 = XLSX.utils.encode_cell({r:R, c:Adef.colMap['규격']});
+    const pname = normWS(safeGet(S_A[pnameA1],'v'));
+    const gname  = normWS(safeGet(S_A[gnameA1],'v'));
+    const hasPercent = (pname && pname.includes('%')) || (gname && gname.includes('%'));
 
-      const refs = collectRowRefs(S_A, R, [...colsToScan], selfName);
-      const rep = mostFrequentRef(refs);
+    let foundAnyRef = false;
 
-      let status = '일치', refKey = '', refSheet = '', refRow = '';
-      if (rep){
-        refSheet = rep.sheet; refRow = rep.row;
-        const targetMap = (rep.sheet.toLowerCase()==='단가대비표')? Bmap : (rep.sheet.toLowerCase()==='일위대가목록')? Cmap : null;
-        refKey = targetMap? (targetMap.get(rep.row)||'') : '';
+    // 열 전부 스캔
+    for (let C = 0; C <= range.e.c; C++){
+      const A1 = XLSX.utils.encode_cell({r:R, c:C});
+      const f = safeGet(S_A[A1],'f');
+      if (!f) continue;
+      const refs = collectExternalRefs(f, selfName);
+      if (!refs.length) continue;
+
+      for (const {sheet, col, row} of refs){
+        // 대상 시트 한정: 단가대비표 / 일위대가목록
+        const sheetLower = String(sheet||'').toLowerCase();
+        const isDV = sheetLower === '단가대비표';
+        const isLS = sheetLower === '일위대가목록';
+        if (!isDV && !isLS) continue;
+
+        foundAnyRef = true;
+        const refKey = isDV ? (Bmap.get(row)||'') : (Cmap.get(row)||'');
+        let status = '일치';
         if (!refKey || normWS(refKey.split('|')[0])!==normWS(myKey.split('|')[0]) || normWS(refKey.split('|')[1])!==normWS(myKey.split('|')[1])){
-          status = '불일치';
+          status = hasPercent ? '제외' : '불일치';
         }
-      } else {
-        // 참조 없음: 수량 값이 상수이고 0이 아니면 불일치
-        const qtyCol = Adef.colMap['수량'];
-        if (typeof qtyCol === 'number'){
-          const qtyA1 = XLSX.utils.encode_cell({r:R, c:qtyCol});
-          const qcell = S_A[qtyA1];
-          const qF = safeGet(qcell,'f');
-          const qV = Number(safeGet(qcell,'v'));
-          if (!qF && Number.isFinite(qV) && Math.abs(qV) > 0) status = '불일치';
-        }
-      }
 
-      out.push({시트:'일위대가', 행:excelRow, 키:myKey, 참조시트:refSheet, 참조행:refRow, 참조키:refKey, 결과:status});
+        // Py와 유사한 필드 구성
+        out.push({
+          시트: '일위대가',
+          행: excelRow,
+          '일위대가_품명|규격': myKey,
+          참조시트: sheet,
+          참조셀: `${sheet}!${col}${row}`,
+          참조키: refKey || '',
+          결과: status
+        });
+      }
     }
 
-    return summarize('A', out);
+    // 참조 전혀 없는데 수량 값이 입력(0/빈칸 제외) → 불일치
+    if (!foundAnyRef) {
+      const qCol = Adef.colMap['수량'];
+      if (typeof qCol === 'number') {
+        const qA1 = XLSX.utils.encode_cell({r:R, c:qCol});
+        const qCell = S_A[qA1];
+        const val = safeGet(qCell,'v');
+        const isEmpty = (val===null || val===undefined || val==='' || Number(val)===0);
+        if (!isEmpty){
+          out.push({
+            시트: '일위대가',
+            행: excelRow,
+            '일위대가_품명|규격': myKey,
+            참조시트: '',
+            참조셀: '',
+            참조키: '',
+            결과: '불일치'
+          });
+        }
+      }
+    }
   }
+
+  // 요약(참조 개수 기준 집계)
+  const mismatches = out.filter(r=>r.결과==='불일치');
+  const matches    = out.filter(r=>r.결과==='일치');
+  const summary = {검사:'A', 전체:out.length, 일치:matches.length, 불일치:mismatches.length};
+  return {name:'A', rows:out, summary, matches, mismatches};
+}
 
   // ------------------------------
   // 검사 B: 일위대가목록 ↔ 일위대가 — "행 단위"로 참조셀 집계, 근접 헤더 매핑 유지
@@ -508,4 +545,5 @@
     }
   };
 })();
+
 
