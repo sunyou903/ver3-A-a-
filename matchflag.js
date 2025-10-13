@@ -230,8 +230,13 @@ function checkA(wb){
         foundAnyRef = true;
         const refKey = isDV ? (Bmap.get(row)||'') : (Cmap.get(row)||'');
         let status = '일치';
-        if (!refKey || normWS(refKey.split('|')[0])!==normWS(myKey.split('|')[0]) || normWS(refKey.split('|')[1])!==normWS(myKey.split('|')[1])){
-          status = hasPercent ? '제외' : '불일치';
+        if (!refKey || normWS(refKey.split('|')[0]) !== normWS(myKey.split('|')[0]) ||
+               normWS(refKey.split('|')[1]) !== normWS(myKey.split('|')[1])) {
+          if (pname.includes('%') || gname.includes('%')) {
+            status = '제외';   // ✅ PY 코드 동일 처리
+          } else {
+            status = '불일치';
+          }
         }
 
         // Py와 유사한 필드 구성
@@ -545,5 +550,6 @@ function checkA(wb){
     }
   };
 })();
+
 
 
