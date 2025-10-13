@@ -233,7 +233,7 @@ function checkA(wb){
         if (!refKey || normWS(refKey.split('|')[0]) !== normWS(myKey.split('|')[0]) ||
                normWS(refKey.split('|')[1]) !== normWS(myKey.split('|')[1])) {
           if (pname.includes('%') || gname.includes('%')) {
-            status = '제외';   // ✅ PY 코드 동일 처리
+            status = '제외'; 
           } else {
             status = '불일치';
           }
@@ -550,6 +550,7 @@ function checkA(wb){
     }
   };
 })();
+
 
 
 
