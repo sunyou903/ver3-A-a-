@@ -283,43 +283,110 @@ function checkA(wb){
 }
 
   // ------------------------------
-  // 검사 B: 일위대가목록 ↔ 일위대가 — "행 단위"로 참조셀 집계, 근접 헤더 매핑 유지
-  // ------------------------------
-  function checkB(wb){
-    const S_C = getSheetCaseInsensitive(wb,'일위대가목록');
-    const S_A = getSheetCaseInsensitive(wb,'일위대가');
-    const out = [];
-    if (!S_C || !S_A) return {name:'B', rows:[], summary:{note:'필수 시트 미존재'}};
+// 검사 B: 일위대가목록 ↔ 일위대가 — 파이썬(run_check_B) 정합
+function checkB(wb){
+  const S_C = getSheetCaseInsensitive(wb,'일위대가목록');  // list
+  const S_A = getSheetCaseInsensitive(wb,'일위대가');      // ul
+  const out = [];
+  if (!S_C || !S_A) return {name:'B', rows:[], summary:{note:'필수 시트 미존재'}};
 
-    const wantsList = ['품명','규격','단위','수량'];
-    const Cdef = findHeaderRowAndCols(S_C, wantsList);
-    const Adef = findHeaderRowAndCols(S_A, wantsList);
-    if (!Cdef || !Adef) return {name:'B', rows:[], summary:{note:'헤더 미검출'}};
+  const wantsList = ['품명','규격','단위']; // 수량은 B검사 비교키에 불필요
+  const wantsUL   = ['품명','규격','단위','수량'];
+  const Cdef = findHeaderRowAndCols(S_C, wantsList);
+  const Adef = findHeaderRowAndCols(S_A, wantsUL);
+  if (!Cdef || !Adef) return {name:'B', rows:[], summary:{note:'헤더 미검출'}};
 
-    const Cmap = buildRowKeyMap(S_C, Cdef.headerRow, Cdef.colMap, {left:'품명', right:'규격'});
-    const Amap = buildRowKeyMap(S_A, Adef.headerRow, Adef.colMap, {left:'품명', right:'규격'});
-    const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_C) || '일위대가목록';
+  const Cmap = buildRowKeyMap(S_C, Cdef.headerRow, Cdef.colMap, {left:'품명', right:'규격'});
+  const selfListName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_C) || '일위대가목록';
+  const ulName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_A) || '일위대가';
 
-    const range = XLSX.utils.decode_range(S_C['!ref']);
-    // 목록은 보통 우측 금액/단가 영역에 참조 수식이 몰림 → 헤더 기준 우측 5~45열 스캔
-    const colsToScan = [];
-    for (let c = Math.min(5, range.e.c); c <= Math.min(45, range.e.c); c++) colsToScan.push(c);
+  // UL 헤더행에서 키를 만드는 보정 함수 (PY의 build_ul_header_key 유사)
+  function buildULHeaderKeyAt(r){
+    const get = (k)=> {
+      const c = Adef.colMap[k];
+      if (typeof c !== 'number') return '';
+      const a1 = XLSX.utils.encode_cell({r, c});
+      return normWS(safeGet(S_A[a1], 'v'));
+    };
+    let pname = get('품명');
+    let spec  = get('규격');
+    // 규격이 비었으면, 품명을 "두 칸 이상 공백" 기준으로 분할하여 보정
+    if (!spec && pname){
+      const toks = pname.split(/\s{2,}|\u3000{2,}/).map(s=>s.trim()).filter(Boolean);
+      if (toks.length >= 2){ pname = toks[0]; spec = toks[1]; }
+    }
+    const key = `${pname||''}|${spec||''}`.replace(/^\|+|\|+$/g,'');
+    return normWS(key);
+  }
 
-    for (let R = Cdef.headerRow+1; R <= range.e.r; R++){
-      const excelRow = R+1;
-      const myKey = Cmap.get(excelRow); if (!myKey) continue;
-      const refsAll = collectRowRefs(S_C, R, colsToScan, selfName);
-      const refsToA = refsAll.filter(r => r.sheet.toLowerCase()==='일위대가');
-      if (!refsToA.length) continue; // 참조 없는 행은 스킵
-      const rep = mostFrequentRef(refsToA); if (!rep) continue;
-      const headerRowLike = nearestHeaderLikeUp(S_A, rep.row-1, Adef.colMap, 40);
-      const refKey = headerRowLike!=null ? Amap.get(headerRowLike+1) : (Amap.get(rep.row) || '');
-      const status = (!refKey || normWS(refKey)!==normWS(myKey))? '불일치':'일치';
-      out.push({시트:'일위대가목록', 행:excelRow, 키:myKey, 참조시트:'일위대가', 참조행:rep.row, 참조키:refKey||'', 결과:status});
+  // 목록 시트 범위 (행 전체 스캔)
+  const range = XLSX.utils.decode_range(S_C['!ref']);
+  let checkedRefs = 0;        // B_참조셀
+  let mappedRows  = 0;        // B_매핑된_행
+  let mismatches  = 0;        // B_불일치
+
+  for (let R = Cdef.headerRow+1; R <= range.e.r; R++){
+    const excelRow = R+1;
+    const myKey = Cmap.get(excelRow); 
+    if (!myKey) continue;
+
+    // 이 행의 "모든 열"에서 외부참조 수식 수집 → 일위대가로 향하는 참조만 필터
+    const refsAll = collectRowRefs(S_C, R, Array.from({length: range.e.c+1}, (_,c)=>c), selfListName);
+    const refsToUL = refsAll.filter(r => r.sheet.toLowerCase() === ulName.toLowerCase());
+    if (!refsToUL.length) {
+      // 파이썬도 B에서는 "외부참조 없음"을 불일치로 새지 않음 — 매핑/집계에서만 반영
+      continue;
     }
 
-    return summarize('B', out);
+    // (시트,row) 최빈값 대표
+    const rep = mostFrequentRef(refsToUL);
+    if (!rep) continue;
+
+    // 대표 참조 row 바로 위로 헤더스러운 줄을 탐색
+    const headerRowLike = nearestHeaderLikeUp(S_A, rep.row-1, Adef.colMap, 40);
+    // 헤더가 잡힌 경우에만 UL키를 만든다(파이썬도 hdr_row가 있어야 hdr_key 생성)
+    let ulHdrKey = null;
+    if (headerRowLike != null){
+      ulHdrKey = buildULHeaderKeyAt(headerRowLike);
+      mappedRows += 1; // 헤더 매핑된 행 수
+    }
+
+    // 비교 및 기록
+    let status = '일치';
+    if (!ulHdrKey || normWS(ulHdrKey) !== normWS(myKey)) {
+      status = '불일치';
+      if (ulHdrKey) mismatches += 1; // 헤더가 잡혔는데 키가 다르면 불일치 집계
+    }
+
+    // 이 행에서 참조로 검사한 "셀 수" = refsToUL 개수 (파이썬의 checked와 의미 동일)
+    checkedRefs += refsToUL.length;
+
+    out.push({
+      시트: '일위대가목록',
+      행: excelRow,
+      '일위대가목록_품명|규격': myKey,
+      대표참조시트: rep.sheet,
+      대표참조행: rep.row,
+      '매핑_헤더행': headerRowLike!=null? (headerRowLike+1) : '',
+      '매핑_헤더_품명|규격': ulHdrKey || '',
+      '참조셀_수': refsToUL.length,
+      결과: status
+    });
   }
+
+  // 파이썬식 요약 필드로 리턴(파일 Summary 시트 합치기 용)
+  const summary = {
+    검사: 'B',
+    'B_참조셀': checkedRefs,
+    'B_매핑된_행': mappedRows,
+    'B_불일치': mismatches
+  };
+
+  // 표준 리턴 구조 유지(ALL/MATCH/MISMATCH 시트 생성 위해)
+  const matches = out.filter(r=>r.결과==='일치');
+  const mism = out.filter(r=>r.결과==='불일치');
+  return {name:'B', rows:out, summary, matches, mismatches:mism};
+}
 
   // ------------------------------
   // 검사 C: 공종별내역서 — 행 단위로 대표 참조, 합계단가 상수 판정은 해당 열만 체크
@@ -550,6 +617,7 @@ function checkA(wb){
     }
   };
 })();
+
 
 
 
