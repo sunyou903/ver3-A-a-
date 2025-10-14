@@ -1,4 +1,58 @@
 <!-- =====================================================
+index.html — 두 파일 비교/매칭 도구 (깨끗한 UI 리디자인)
+- 기존 nb2.js가 사용하는 주요 요소 ID를 그대로 유지:
+#fileA, #fileB, #sheetA, #sheetB, #threshold, #run, #log
+- 이 파일은 UI만 정갈하게 구성합니다. 로직은 기존 nb2.js에 위임.
+===================================================== -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>두 파일 매칭 · MatchFlag</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<style>
+:root { --bg:#0b0c10; --panel:#101219; --card:#141820; --text:#e7eaf1; --muted:#9aa3b2; --border:#242a35; --brand:#6e6cff; --accent:#79ffe1; --radius:16px; --shadow:0 8px 24px rgba(0,0,0,.25); }
+:root.light { --bg:#f7f8fb; --panel:#ffffff; --card:#ffffff; --text:#0f172a; --muted:#6b7280; --border:#e7eaf1; --brand:#4f46e5; --accent:#10b981; --shadow:0 12px 30px rgba(20,24,40,.06); }
+*{box-sizing:border-box}
+body{margin:0;background:
+radial-gradient(1100px 600px at 110% -10%, color-mix(in srgb,var(--brand) 12%, transparent), transparent 60%),
+radial-gradient(1200px 800px at -10% 120%, color-mix(in srgb,var(--accent) 10%, transparent), transparent 60%),
+var(--bg);
+color:var(--text); font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif; line-height:1.6}
+.container{max-width:1100px;margin:0 auto;padding:24px}
+
+
+/* Nav */
+.nav{position:sticky;top:0;z-index:40;backdrop-filter:saturate(180%) blur(10px);background:color-mix(in srgb,var(--panel) 70%, transparent);border-bottom:1px solid var(--border)}
+.nav-inner{display:flex;align-items:center;justify-content:space-between;padding:12px 24px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800}
+.logo{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--accent));box-shadow:var(--shadow)}
+.toggle{width:48px;height:28px;border-radius:999px;border:1px solid var(--border);background:var(--panel);position:relative;cursor:pointer}
+.dot{position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:999px;background:linear-gradient(135deg,var(--brand),var(--accent));transition:transform .2s ease}
+.toggle.active .dot{transform:translateX(20px)}
+
+
+/* Layout */
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+.card{grid-column:span 12;background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 96%, transparent),var(--card));border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+@media(min-width:840px){.half{grid-column:span 6}}
+h1{font-size:clamp(22px,3vw,32px);margin:12px 0 6px}
+.muted{color:var(--muted)}
+
+
+/* Form */
+.row{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:720px){.row-2{grid-template-columns:repeat(2,1fr)}}
+label{font-size:13px;color:var(--muted)}
+.input, .file {width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--panel);color:var(--text)}
+.file{padding:10px 12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:12px;border:1px solid color-mix(in srgb,var(--brand) 40%, var(--border));background:linear-gradient(180deg,color-mix(in srgb,var(--brand) 12%, var(--card)),var(--card));color:var(--text);font-weight:700;cursor:pointer;transition:transform .08s ease,border-color .2s ease}
+.btn:hover{transform:translateY(-1px);border-color:var(--brand)}
+.btn.ghost{background:var(--panel);border-color:var(--border);font-weight:600}
+
+
 /* Log */
 .log{height:200px;overflow:auto;border:1px dashed color-mix(in srgb,var(--muted) 40%, var(--border));border-radius:12px;background:var(--panel);padding:12px;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;white-space:pre-wrap}
 .progress{height:10px;border-radius:999px;background:color-mix(in srgb,var(--border) 60%, transparent);overflow:hidden}
@@ -66,27 +120,4 @@
 </main>
 
 
-<!-- 기존 nb2.js가 이벤트를 바인딩한다면 아래 스크립트는 간섭하지 않습니다. 없을 때만 UX 보강. -->
-<script>
-// Theme
-const root = document.documentElement; const btn = document.getElementById('themeBtn');
-const setTheme = (m)=>{ if(m==='light') root.classList.add('light'); else root.classList.remove('light'); localStorage.setItem('mf-theme', m); btn.classList.toggle('active', m==='light'); };
-setTheme(localStorage.getItem('mf-theme') || (matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));
-btn.addEventListener('click',()=> setTheme(root.classList.contains('light')?'dark':'light'));
-
-
-// Optional UX helpers (동일 ID를 쓰는 기존 스크립트가 있으면 이 부분은 무시해도 동작)
-const sheetA = document.getElementById('sheetA');
-const sheetB = document.getElementById('sheetB');
-const log = document.getElementById('log');
-const bar = document.getElementById('bar');
-document.getElementById('clear').addEventListener('click',()=>{ ['fileA','fileB','sheetA','sheetB'].forEach(id=>{const el=document.getElementById(id); if(el.type==='file') el.value=''; else el.value='';}); log.textContent='초기화됨'; bar.style.width='0%';});
-
-
-// 만약 기존 코드에 글로벌 run 함수가 있다면, 실행 버튼에서 호출합니다.
-document.getElementById('run').addEventListener('click',()=>{ if(typeof window.run==='function'){ try{ window.run(); }catch(e){ log.textContent = '실행 중 오류: '+e.message; } } else { log.textContent='(참고) nb2.js가 로딩되면 여기서 자동으로 실행을 위임합니다.'; } });
-</script>
-<script src="lib/xlsx.full.min.js"></script>
-<script src="nb2.js"></script>
-</body>
 </html>
