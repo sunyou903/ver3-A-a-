@@ -569,26 +569,44 @@ function checkB(wb){
 // ------------------------------
   function checkD(wb){
     // 공종별집계표의 단가 3열(재/노/경) 각각에 대해,
-    // 참조된 셀의 시트/행을 모으고 대표를 뽑은 다음
-    // '단가대비표'라면 헤더 위로 탐색해 키를 만든 후 품명(좌측) 기준으로 비교한다.
+    // 참조된 시트가 '단가대비표'든 '공종별 내역서'든(또는 기타든)
+    // 참조행 기준으로 '헤더 위로' 탐색하여 키를 생성하고, 품명(좌측)으로 비교한다.
     const S = getSheetCaseInsensitive(wb,'공종별집계표');
-    const T = getSheetCaseInsensitive(wb,'단가대비표');
-    const out = [];
-    if (!S || !T) return {name:'D', rows:[], summary:{note:'필수 시트 미존재'}};
+    if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 미존재'}};
   
     const wantsS = ['품명','재료비단가','노무비단가','경비단가'];
-    const wantsT = ['품명','규격'];
     const Sdef = findHeaderRowAndCols(S, wantsS);
-    const Tdef = findHeaderRowAndCols(T, wantsT);
-    if (!Sdef || !Tdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};
+    if (!Sdef) return {name:'D', rows:[], summary:{note:'공종별집계표 헤더 미검출'}};
   
-    const Tmap = buildRowKeyMap(T, Tdef.headerRow, Tdef.colMap, {left:'품명', right:'규격'});
+    const wantsT = ['품명','규격']; // 모든 타깃 시트에서 공통적으로 찾을 헤더
     const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
   
     const nameCol = Sdef.colMap['품명'];
     const getNameAt = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
     const targetNameFromKey = k => normWS(String(k||'').split('|')[0]);
   
+    // 타깃 시트별 헤더/맵 캐시
+    const targetCache = new Map(); // sheetName -> {ws, def, rowKeyMap}
+    const getTargetDef = (sheetName)=>{
+      if (!sheetName) return null;
+      const key = String(sheetName);
+      if (targetCache.has(key)) return targetCache.get(key);
+  
+      const ws = getSheetCaseInsensitive(wb, sheetName);
+      if (!ws){ targetCache.set(key, null); return null; }
+  
+      const def = findHeaderRowAndCols(ws, wantsT);
+      let rowKeyMap = null;
+      if (def){
+        // 동일행 폴백 대비, 미리 1회 맵 생성
+        rowKeyMap = buildRowKeyMap(ws, def.headerRow, def.colMap, {left:'품명', right:'규격'});
+      }
+      const pack = {ws, def, rowKeyMap};
+      targetCache.set(key, pack);
+      return pack;
+    };
+  
+    const out = [];
     eachCell(S, (cell, A1, R, C)=>{
       const excelRow = R+1;
       if (excelRow <= Sdef.headerRow+1) return;
@@ -604,23 +622,23 @@ function checkB(wb){
       if (!myName) return;
   
       const f = safeGet(cell,'f');
-      const refs = collectExternalRefs(f, selfName);     // 수식에서 (시트,행) 목록 추출
-      const rep = mostFrequentRef(refs);                 // 대표 참조 1개 선택
+      const refs = collectExternalRefs(f, selfName); // 수식에서 (시트,행) 목록
+      const rep = mostFrequentRef(refs);
   
       let status='일치', refKey='', refSheet='', refRow='';
       if (rep){
         refSheet = rep.sheet; refRow = rep.row;
   
-        // 검사 B와 동일: '단가대비표'면 참조행 위로 헤더 탐색해서 키 생성
+        // ★ 시트 종류 무관하게, 참조행에서 '헤더 위로' 탐색
         let tKey = '';
-        if (String(rep.sheet||'').toLowerCase() === '단가대비표'){
-          const headerRowLike = nearestHeaderLikeUp(T, rep.row-1, Tdef.colMap, 80);
+        const pack = getTargetDef(rep.sheet);
+        if (pack && pack.def){
+          const headerRowLike = nearestHeaderLikeUp(pack.ws, rep.row-1, pack.def.colMap, 120);
           tKey = (headerRowLike!=null)
-            ? buildHeaderKey(T, headerRowLike, Tdef.colMap)
-            : (Tmap.get(rep.row) || '');
+            ? buildHeaderKey(pack.ws, headerRowLike, pack.def.colMap)          // 헤더에서 키 생성
+            : (pack.rowKeyMap ? (pack.rowKeyMap.get(rep.row) || '') : '');     // 폴백: 동일행 키
         } else {
-          // 다른 시트면 동일행 키 시도(필요 시 추가 보정 가능)
-          tKey = '';
+          tKey = ''; // 헤더 구조를 못 찾았으면 불일치 판정 가능
         }
   
         refKey = tKey || '';
@@ -642,6 +660,7 @@ function checkB(wb){
   
     return summarize('D', out);
   }
+
 
   // ------------------------------
   // 검사 E: 단가대비표 — 재료비/노무비 대표 참조 기반 키 비교(장비 단가산출서 특례)
@@ -772,6 +791,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
