@@ -327,6 +327,13 @@ function checkB(wb){
   const out = [];
   if (!S_C || !S_A) return {name:'B', rows:[], summary:{note:'필수 시트 미존재'}};
 
+  function normalizeSheetName(s){
+    return String(s ?? '')
+      .replace(/^'+|'+$/g, '')   // '일위대가' → 일위대가
+      .trim()
+      .toLowerCase();
+  }
+
   // PY와 동일하게: 목록은 품명/규격만 필수, 일위대가는 품명/규격/단위/수량
   const Cdef = findHeaderRowAndCols(S_C, ['품명','규격']);
   const Adef = findHeaderRowAndCols(S_A, ['품명','규격','단위','수량']);
@@ -609,6 +616,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
