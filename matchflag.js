@@ -123,54 +123,79 @@
 
   // 수식 문자열 f에서 모든 A1 참조를 뽑아내 sheet/row 배열로 반환
 // ===== Utilities: formula reference parser =====
-
-// 수식 문자열 f에서 '시트!A1' 참조들을 추출하여 [{sheet,row}] 반환
-function extractRefsFromFormula(f){
-  const out = [];
-  if (typeof f !== 'string' || !f) return out;
-
-  // 1) '시트명'!A1 (따옴표 O)
-  // 2) 시트명!A1   (따옴표 X)
-  // 3) 영역참조(시트!A1:B3)는 A1만 row로 사용
-  const re = /'(.*?)'!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?|([^\s!'"]+)\s*!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?/g;
-
-  let m;
-  while ((m = re.exec(f)) !== null) {
-    let sheet = (m[1] ?? m[4] ?? '').trim();
-    const rowStr = (m[3] ?? m[6] ?? '').trim();
-    const row = parseInt(rowStr, 10);
-    if (!sheet || !Number.isFinite(row)) continue;
-
-    // Excel은 따옴표 안의 작은따옴표가 두 번('') 들어갈 수 있으므로 복원
-    if (sheet.startsWith("'") && sheet.endsWith("'")) {
-      sheet = sheet.slice(1, -1);
-    }
-    sheet = sheet.replace(/''/g, "'").trim();
-
-    out.push({ sheet, row });
-  }
-  return out;
-}
-
-// (선택 권장) 여러 체크에서 공용으로 쓰는 범용 수집기
-function collectRowRefsGeneric(S, R, cols, selfName){
-  const refs = [];
-  for (const c of cols){
-    const addr = XLSX.utils.encode_cell({r:R, c});
-    const cell = S[addr];
-    if (!cell) continue;
-
-    const f = cell.f; // formula
-    if (f && typeof f === 'string'){
-      const found = extractRefsFromFormula(f);
-      for (const r of found){
-        if (r.sheet && r.sheet !== selfName) refs.push(r); // 자기 시트는 제외
+  // 수식 문자열 f에서 모든 A1 참조를 뽑아내 sheet/row 배열로 반환
+  function extractRefsFromFormula(f){
+    const out = [];
+    if (typeof f !== 'string' || !f) return out;
+  
+    // 1) '시트명'!A1  (따옴표 O)
+    // 2) 시트명!A1    (따옴표 X)
+    // 3) 영역 참조 시 시트명!A1:B3 -> A1만 row로 사용
+    // 4) 함수(ROUND, TRUNC, IFERROR, SUM 등)는 무시: 정규식이 A1패턴만 잡음
+    const re = /'(.*?)'!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?|([^\s!'"]+)\s*!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?/g;
+  
+    let m;
+    while ((m = re.exec(f)) !== null) {
+      const sheet = (m[1] ?? m[4] ?? '').trim();
+      const rowStr = (m[3] ?? m[6] ?? '').trim();
+      const row = parseInt(rowStr, 10);
+      if (sheet && Number.isFinite(row)) {
+        out.push({ sheet, row });
       }
     }
+    return out;
   }
-  return refs;
-}
+  
+  // (선택 권장) 여러 체크에서 공용으로 쓰는 범용 수집기
+  function collectRowRefsGeneric(S, R, cols, selfName){
+    const refs = [];
+    for (const c of cols){
+      const addr = XLSX.utils.encode_cell({r:R, c});
+      const cell = S[addr];
+      if (!cell) continue;
+  
+      const f = cell.f; // formula
+      if (f && typeof f === 'string'){
+        const found = extractRefsFromFormula(f);
+        for (const r of found){
+          if (r.sheet && r.sheet !== selfName) refs.push(r); // 자기 시트는 제외
+        }
+      }
+    }
+    return refs;
+  }
 
+// 행 R(0-based)에서 지정한 열들(cols 배열)의 모든 수식을 훑어 외부 참조 목록을 수집
+// selfName: 현재 검사 대상 시트 이름(자기참조 제외 목적)
+  function collectRowRefs(ws, R, cols, selfName){
+    const refs = [];
+    if (!ws || !Array.isArray(cols) || cols.length===0) return refs;
+  
+    for (const c of cols){
+      const addr = XLSX.utils.encode_cell({r:R, c});
+      const cell = ws[addr];
+      const f = cell && typeof cell.f==='string' ? cell.f : null;
+      if (!f) continue;
+  
+      // 수식에서 A1 참조들을 뽑아온다
+      const found = extractRefsFromFormula(f);
+      for (const r of found){
+        // 자기 시트 참조는 제외
+        if (!r.sheet || (selfName && r.sheet === selfName)) continue;
+        // 최소 정보만 보존: {sheet, row}
+        refs.push({ sheet: r.sheet, row: r.row });
+      }
+    }
+  
+    // 중복 제거(같은 셀을 여러 번 참조하는 경우)
+    const uniq = [];
+    const seen = new Set();
+    for (const it of refs){
+      const key = `${it.sheet}#${it.row}`;
+      if (!seen.has(key)){ seen.add(key); uniq.push(it); }
+    }
+    return uniq;
+  }
 
   function buildRowKeyMap(ws, headerRow, colMap, keySpec){
     // keySpec: {left:'품명', right:'규격'} 등 논리키
@@ -259,17 +284,7 @@ function collectRowRefsGeneric(S, R, cols, selfName){
   // - 각 데이터 행에서 특정 열 집합만 스캔하여 외부참조를 모으고 대표(최빈) 1개로 판정
   // - 참조 없음 && 수량 값이 상수(수식 아님) && 0이 아니면 불일치
   // ------------------------------
-  function collectRowRefs(ws, rowR0, colsToScan, selfName){
-    const refs = [];
-    for (const C of colsToScan){
-      const a1 = XLSX.utils.encode_cell({r:rowR0, c:C});
-      const f = safeGet(ws[a1],'f');
-      if (!f) continue;
-      const part = collectExternalRefs(f, selfName);
-      if (part && part.length) refs.push(...part);
-    }
-    return refs;
-  }
+  
   function checkA(wb){
     const S_A = getSheetCaseInsensitive(wb,'일위대가');
     const S_B = getSheetCaseInsensitive(wb,'단가대비표');
@@ -671,6 +686,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
