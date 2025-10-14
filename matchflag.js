@@ -568,39 +568,31 @@ function checkB(wb){
 // 검사 D (공종별집계표): 열 단위 유지 + 합계행 헤더탐색 + 진단 카운터
 // ------------------------------
   function checkD(wb){
-    // 공종별집계표의 단가 3열(재/노/경) 각각에 대해,
-    // 참조된 시트가 '단가대비표'든 '공종별 내역서'든(또는 기타든)
-    // 참조행 기준으로 '헤더 위로' 탐색하여 키를 생성하고, 품명(좌측)으로 비교한다.
+    // 1) 시트 준비
     const S = getSheetCaseInsensitive(wb,'공종별집계표');
     if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 미존재'}};
   
-    const wantsS = ['품명','재료비단가','노무비단가','경비단가'];
-    const Sdef = findHeaderRowAndCols(S, wantsS);
+    // 공종별집계표는 품명 + 3개 단가열 필요
+    const Sdef = findHeaderRowAndCols(S, ['품명','재료비단가','노무비단가','경비단가']);
     if (!Sdef) return {name:'D', rows:[], summary:{note:'공종별집계표 헤더 미검출'}};
   
-    const wantsT = ['품명','규격']; // 모든 타깃 시트에서 공통적으로 찾을 헤더
     const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
-  
     const nameCol = Sdef.colMap['품명'];
-    const getNameAt = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
-    const targetNameFromKey = k => normWS(String(k||'').split('|')[0]);
+    const getMyName = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
   
-    // 타깃 시트별 헤더/맵 캐시
+    // 2) 대상(참조) 시트 공통 정의: B와 동일하게 품명/규격/단위/수량을 요구
+    const wantsT = ['품명','규격','단위','수량'];
+  
+    // B와 같은 캐시 패턴
     const targetCache = new Map(); // sheetName -> {ws, def, rowKeyMap}
     const getTargetDef = (sheetName)=>{
       if (!sheetName) return null;
       const key = String(sheetName);
       if (targetCache.has(key)) return targetCache.get(key);
-  
       const ws = getSheetCaseInsensitive(wb, sheetName);
       if (!ws){ targetCache.set(key, null); return null; }
-  
       const def = findHeaderRowAndCols(ws, wantsT);
-      let rowKeyMap = null;
-      if (def){
-        // 동일행 폴백 대비, 미리 1회 맵 생성
-        rowKeyMap = buildRowKeyMap(ws, def.headerRow, def.colMap, {left:'품명', right:'규격'});
-      }
+      const rowKeyMap = def ? buildRowKeyMap(ws, def.headerRow, def.colMap, {left:'품명', right:'규격'}) : null;
       const pack = {ws, def, rowKeyMap};
       targetCache.set(key, pack);
       return pack;
@@ -611,6 +603,7 @@ function checkB(wb){
       const excelRow = R+1;
       if (excelRow <= Sdef.headerRow+1) return;
   
+      // 3) 3개 단가열만 검사 (재/노/경)
       const isTargetCol = (
         C===Sdef.colMap['재료비단가'] ||
         C===Sdef.colMap['노무비단가'] ||
@@ -618,32 +611,32 @@ function checkB(wb){
       );
       if (!isTargetCol) return;
   
-      const myName = getNameAt(R);
+      const myName = getMyName(R);
       if (!myName) return;
   
+      // 4) 수식에서 외부 참조 모아 대표 참조 1개 선택 (B와 동일)
       const f = safeGet(cell,'f');
-      const refs = collectExternalRefs(f, selfName); // 수식에서 (시트,행) 목록
+      const refs = collectExternalRefs(f, selfName);
       const rep = mostFrequentRef(refs);
-  
       let status='일치', refKey='', refSheet='', refRow='';
+  
       if (rep){
         refSheet = rep.sheet; refRow = rep.row;
   
-        // ★ 시트 종류 무관하게, 참조행에서 '헤더 위로' 탐색
+        // 5) B와 동일한 “윗방향 헤더 탐색” + 동일행 폴백
         let tKey = '';
         const pack = getTargetDef(rep.sheet);
         if (pack && pack.def){
-          const headerRowLike = nearestHeaderLikeUp(pack.ws, rep.row-1, pack.def.colMap, 120);
+          const headerRowLike = nearestHeaderLikeUp(pack.ws, rep.row-1, pack.def.colMap, 80); // ← B와 동일 유틸
           tKey = (headerRowLike!=null)
-            ? buildHeaderKey(pack.ws, headerRowLike, pack.def.colMap)          // 헤더에서 키 생성
-            : (pack.rowKeyMap ? (pack.rowKeyMap.get(rep.row) || '') : '');     // 폴백: 동일행 키
-        } else {
-          tKey = ''; // 헤더 구조를 못 찾았으면 불일치 판정 가능
+            ? buildHeaderKey(pack.ws, headerRowLike, pack.def.colMap)      // 헤더행 자체로 키 구성
+            : (pack.rowKeyMap ? (pack.rowKeyMap.get(rep.row) || '') : ''); // 폴백: 동일행 키
         }
-  
         refKey = tKey || '';
-        const tName = targetNameFromKey(tKey);
-        if (!tName || tName !== myName) status='불일치';
+  
+        // 6) 비교는 B 철학대로 '품명(좌측)'만
+        const tName = String(refKey).split('|')[0]?.trim() || '';
+        if (!tName || normWS(tName) !== normWS(myName)) status='불일치';
       }
   
       out.push({
@@ -660,6 +653,7 @@ function checkB(wb){
   
     return summarize('D', out);
   }
+
 
 
   // ------------------------------
@@ -791,6 +785,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
