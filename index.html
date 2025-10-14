@@ -1,59 +1,92 @@
-<!doctype html>
-<p><a href="./matchflag.html">▶ Matchflag(다시트 교차검증) 페이지로 이동</a></p>
-
 <html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <title>단가대비표 매칭 (브라우저 전용)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; }
-    body { margin: 24px; max-width: 980px; }
-    h1 { margin: 0 0 12px; }
-    .card { border: 1px solid #ddd; border-radius: 14px; padding: 16px; margin: 12px 0; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    button { padding: 10px 16px; border-radius: 10px; border: 1px solid #ccc; cursor: pointer; }
-    .muted { color: #666; font-size: 14px; }
-    .log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#fafafa; padding:10px; border-radius:8px; border:1px solid #eee; }
-    .grid { display: grid; gap: 8px; }
-    label { font-weight: 600; }
-    input[type="text"] { padding: 8px; border-radius: 8px; border: 1px solid #ccc; width: 100%; }
-  </style>
-
+/* Log */
+.log{height:200px;overflow:auto;border:1px dashed color-mix(in srgb,var(--muted) 40%, var(--border));border-radius:12px;background:var(--panel);padding:12px;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;white-space:pre-wrap}
+.progress{height:10px;border-radius:999px;background:color-mix(in srgb,var(--border) 60%, transparent);overflow:hidden}
+.bar{height:100%;width:0%;background:linear-gradient(90deg,var(--brand),var(--accent));transition:width .3s ease}
+.hint{font-size:12px;color:var(--muted)}
+</style>
 </head>
 <body>
+<header class="nav">
+<div class="nav-inner container">
+<div class="brand"><div class="logo" aria-hidden="true"></div>MatchFlag</div>
+<button id="themeBtn" class="toggle" aria-label="테마 전환"><span class="dot"></span></button>
+</div>
+</header>
+
+
+<main class="container">
+<section class="card">
+<h1>두 파일 매칭</h1>
+<p class="muted">엑셀 A/B의 <strong>단가대비표</strong> 시트를 기준으로 항목을 매칭하고 가격 항목을 비교합니다. (브라우저 내 처리)</p>
+<div class="grid" style="margin-top:12px;">
+<div class="card half">
+<div class="row">
+<div>
+<label for="fileA">파일 A</label>
+<input id="fileA" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
+</div>
+<div>
+<label for="sheetA">시트명 (기본: 단가대비표)</label>
+<input id="sheetA" class="input" placeholder="단가대비표" />
+</div>
+</div>
+</div>
+<div class="card half">
+<div class="row">
+<div>
+<label for="fileB">파일 B</label>
+<input id="fileB" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
+</div>
+<div>
+<label for="sheetB">시트명 (기본: 단가대비표)</label>
+<input id="sheetB" class="input" placeholder="단가대비표" />
+</div>
+</div>
+</div>
+</div>
+
+
+<div class="row row-2" style="margin-top:12px;align-items:end;">
+<div>
+<label for="threshold">유사도 임계값 (%)</label>
+<input id="threshold" class="input" type="number" min="0" max="100" step="1" value="30" />
+<div class="hint">낮을수록 느슨하게 매칭합니다. 데이터 품질이 낮으면 40–60% 권장.</div>
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+<button id="run" class="btn" aria-label="매칭 실행">매칭 실행</button>
+<button id="clear" class="btn ghost" aria-label="입력 초기화">초기화</button>
+</div>
+</div>
+
+
+<div class="progress" style="margin:16px 0 8px;"><div id="bar" class="bar"></div></div>
+<div id="log" class="log" aria-live="polite">대기 중…</div>
+</section>
+</main>
+
+
+<!-- 기존 nb2.js가 이벤트를 바인딩한다면 아래 스크립트는 간섭하지 않습니다. 없을 때만 UX 보강. -->
+<script>
+// Theme
+const root = document.documentElement; const btn = document.getElementById('themeBtn');
+const setTheme = (m)=>{ if(m==='light') root.classList.add('light'); else root.classList.remove('light'); localStorage.setItem('mf-theme', m); btn.classList.toggle('active', m==='light'); };
+setTheme(localStorage.getItem('mf-theme') || (matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));
+btn.addEventListener('click',()=> setTheme(root.classList.contains('light')?'dark':'light'));
+
+
+// Optional UX helpers (동일 ID를 쓰는 기존 스크립트가 있으면 이 부분은 무시해도 동작)
+const sheetA = document.getElementById('sheetA');
+const sheetB = document.getElementById('sheetB');
+const log = document.getElementById('log');
+const bar = document.getElementById('bar');
+document.getElementById('clear').addEventListener('click',()=>{ ['fileA','fileB','sheetA','sheetB'].forEach(id=>{const el=document.getElementById(id); if(el.type==='file') el.value=''; else el.value='';}); log.textContent='초기화됨'; bar.style.width='0%';});
+
+
+// 만약 기존 코드에 글로벌 run 함수가 있다면, 실행 버튼에서 호출합니다.
+document.getElementById('run').addEventListener('click',()=>{ if(typeof window.run==='function'){ try{ window.run(); }catch(e){ log.textContent = '실행 중 오류: '+e.message; } } else { log.textContent='(참고) nb2.js가 로딩되면 여기서 자동으로 실행을 위임합니다.'; } });
+</script>
 <script src="lib/xlsx.full.min.js"></script>
-<script defer src="nb2.js"></script>
-  <h1>단가대비표 매칭 (GitHub Pages / 브라우저 내 처리)</h1>
-  <p class="muted">두 엑셀 파일을 업로드하면 브라우저 안에서 비교 후 결과 엑셀을 다운로드합니다. 서버 전송 없음.</p>
-
-  <div class="card grid">
-    <div class="row">
-      <div>
-        <label>파일 A (예: 기계)</label>
-        <input id="fileA" type="file" accept=".xlsx,.xlsm,.xls" />
-      </div>
-      <div>
-        <label>파일 B (예: 토목)</label>
-        <input id="fileB" type="file" accept=".xlsx,.xlsm,.xls" />
-      </div>
-    </div>
-
-    <div class="row">
-      <div>
-        <label>시트명 (기본: 단가대비표)</label>
-        <input id="sheetName" type="text" placeholder="단가대비표" />
-      </div>
-      <div>
-        <label>유사도 임계값(%) (기본: 30)</label>
-        <input id="threshold" type="text" placeholder="30" />
-      </div>
-    </div>
-
-    <div>
-      <button id="runBtn">매칭 실행 → 결과 엑셀 다운로드</button>
-    </div>
-    <div id="log" class="log"></div>
-  </div>
+<script src="nb2.js"></script>
 </body>
 </html>
