@@ -63,22 +63,27 @@
     }
     return null;
   }
-  function buildHeaderKey(ws, row0, colMap){
-    const pname = normWS(safeGet(ws[XLSX.utils.encode_cell({r:row0, c:colMap['품명']})], 'v'));
-    let spec  = normWS(safeGet(ws[XLSX.utils.encode_cell({r:row0, c:colMap['규격']})], 'v'));
+   function buildHeaderKey(ws, row0, colMap){
+    // PY 로직과 동일: "원문(raw)에서 먼저 분할 보정" → 그 다음 정규화
+    const rawP = safeGet(ws[XLSX.utils.encode_cell({ r: row0, c: colMap['품명'] })], 'v');
+    const rawS = safeGet(ws[XLSX.utils.encode_cell({ r: row0, c: colMap['규격'] })], 'v');
+  
+    const pname = normWS(rawP);
+    let   spec  = normWS(rawS);
+  
     if (!spec) {
-      // 연속 공백(전각 포함) 2개 이상 기준 분할: "품명  규격"
-      const toks = String(pname||'').split(/[\u3000 ]{2,}/).map(s=>s.trim()).filter(Boolean);
-      if (toks.length >= 2){ return `${toks[0]}|${toks[1]}`; }
+      // 전/반각 공백 2칸 이상 기준으로 '원문'에서 분리 → 각 토막을 정규화 후 사용
+      const toks = String(rawP ?? '')
+        .split(/[\u3000 ]{2,}/)
+        .map(s => normWS(s))
+        .filter(Boolean);
+      if (toks.length >= 2) {
+        return `${toks[0]}|${toks[1]}`.replace(/^\|+|\|+$/g, '');
+      }
     }
-    return `${pname}|${spec}`.replace(/^\|+|\|+$/g,'');
+    return `${pname}|${spec}`.replace(/^\|+|\|+$/g, '');
   }
-  function normalizeSheetName(s){
-    return String(s ?? '')
-      .replace(/^'+|'+$/g, '')
-      .trim()
-      .toLowerCase();
-  }
+
   function findHeaderRowAndCols(ws, wants, scanRows=12, scanCols=40){
     // ws: SheetJS worksheet, wants: string[] of logical labels (keys in LABELS_COMMON)
     // returns {headerRow, colMap:{want->colIndex(number starting 0)}} or null
@@ -595,6 +600,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
