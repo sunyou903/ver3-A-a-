@@ -562,46 +562,72 @@ function checkB(wb){
   // ------------------------------
   // 검사 D: 공종별집계표 — 재/노/경 단가 외부참조 대표 ↔ 품명만 느슨 비교
   // ------------------------------
+ 
   function checkD(wb){
     const S = getSheetCaseInsensitive(wb,'공종별집계표');
-    const T = getSheetCaseInsensitive(wb,'단가대비표');
     const out = [];
-    if (!S || !T) return {name:'D', rows:[], summary:{note:'필수 시트 미존재'}};
-
-    const wantsS = ['품명','재료비단가','노무비단가','경비단가'];
-    const wantsT = ['품명','규격'];
-    const Sdef = findHeaderRowAndCols(S, wantsS);
-    const Tdef = findHeaderRowAndCols(T, wantsT);
-    if (!Sdef || !Tdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};
-
-    const Tmap = buildRowKeyMap(T, Tdef.headerRow, Tdef.colMap, {left:'품명', right:'규격'});
+    if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 시트 미존재'}}; // 안전망
+  
+    const wants = ['품명','규격','재료비단가','노무비단가','경비단가'];
+    const Sdef = findHeaderRowAndCols(S, wants);
+    if (!Sdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};  // 안전망
+  
+    // (5) 좌측 품명만 비교: normWS로 정규화
+    const Smap = buildRowKeyMap(S, Sdef.headerRow, Sdef.colMap, {left:'품명', right:'규격'}); // 키는 기존대로
+    const colsToCheck = ['재료비단가','노무비단가','경비단가']
+      .map(k => Sdef.colMap[k]).filter(v => typeof v === 'number');
+  
     const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
-
-    // S 시트를 훑으며 재/노/경 단가 셀들의 외부참조 대표를 모으고 품명만 비교
-    const nameCol = Sdef.colMap['품명'];
-    const getNameAt = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
-
-    const targetNameFromKey = k => normWS(String(k||'').split('|')[0]);
-
-    eachCell(S, (cell, A1, R, C)=>{
-      const excelRow = R+1; if (excelRow<=Sdef.headerRow+1) return;
-      if (C!==Sdef.colMap['재료비단가'] && C!==Sdef.colMap['노무비단가'] && C!==Sdef.colMap['경비단가']) return;
-      const myName = getNameAt(R);
-      if (!myName) return;
-      const f = safeGet(cell,'f'); const refs = collectExternalRefs(f, selfName); const rep=mostFrequentRef(refs);
-      let status='일치', refKey='', refSheet='', refRow='';
-      if (rep){
-        refSheet = rep.sheet; refRow = rep.row;
-        const tKey = (rep.sheet.toLowerCase()==='단가대비표') ? Tmap.get(rep.row) : '';
-        refKey = tKey||'';
-        const tName = targetNameFromKey(tKey);
-        if (!tName || tName !== myName) status='불일치';
+  
+    // (4) 첫 데이터 행 포함: headerRow+1부터 검사, early-return 제거
+    const refRange = XLSX.utils.decode_range(S['!ref']);
+    for (let R = Sdef.headerRow + 1; R <= refRange.e.r; R++){
+      const excelRow = R + 1;
+  
+      const myKey = Smap.get(excelRow);
+      const myName = myKey ? normWS(String(myKey).split('|')[0]) : '';
+      if (!myName) continue;
+  
+      for (const C of colsToCheck){
+        const A1 = XLSX.utils.encode_cell({r:R, c:C});
+        const cell = S[A1];
+        const f = cell && typeof cell.f==='string' ? cell.f : null;
+  
+        // (3) 대표 참조 없음은 제외: refs 없으면 push하지 않음
+        if (!f) continue;
+  
+        // 기존 파서 재사용 (자기시트 제외)
+        const refsAll = extractRefsFromFormula(f);                         // :contentReference[oaicite:5]{index=5}
+        const selfNorm = normalizeSheetNameForLookup(selfName);            // :contentReference[oaicite:6]{index=6}
+        const refs = refsAll.filter(r => r.sheet &&
+          normalizeSheetNameForLookup(r.sheet).toLowerCase() !== selfNorm.toLowerCase());
+  
+        const rep = mostFrequentRef(refs.map(r => ({sheet:r.sheet, col:'', row:r.row}))); // :contentReference[oaicite:7]{index=7}
+        if (!rep) continue; // 대표 참조 없으면 제외
+  
+        // (2) 단가대비표로 제한 X → 어떤 시트든 키 생성
+        const refKey = getKeyFromAnySheet(wb, rep.sheet, rep.row);        // :contentReference[oaicite:8]{index=8}
+        const tName  = refKey ? normWS(String(refKey).split('|')[0]) : '';
+  
+        const status = (tName && tName === myName) ? '일치' : '불일치';
+        const label  = (C===Sdef.colMap['재료비단가']?'재료비': C===Sdef.colMap['노무비단가']?'노무비':'경비');
+  
+        out.push({
+          시트: '공종별집계표',
+          행: excelRow,
+          품명: myName,
+          단가열: label,
+          참조시트: rep.sheet,
+          참조행: rep.row,
+          참조키: refKey || '',
+          결과: status
+        });
       }
-      out.push({시트:'공종별집계표', 행:excelRow, 품명:myName, 단가열:(C===Sdef.colMap['재료비단가']?'재료비':C===Sdef.colMap['노무비단가']?'노무비':'경비'), 참조시트:refSheet, 참조행:refRow, 참조키:refKey||'', 결과:status});
-    });
-
+    }
+  
     return summarize('D', out);
   }
+
 
   // ------------------------------
   // 검사 E: 단가대비표 — 재료비/노무비 대표 참조 기반 키 비교(장비 단가산출서 특례)
@@ -732,6 +758,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
