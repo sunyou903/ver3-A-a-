@@ -50,7 +50,35 @@
     경비단가: ['경비','경비 단가','경비 적용단가','경비적용단가'],
     합계단가: ['합계단가','합 계 단 가','총단가','총 단가']
   };
-
+  function nearestHeaderLikeUp(ws, startRow0, colMap, maxScan=80){
+    // ws: SheetJS ws, startRow0: 0-based, colMap: {품명, 단위, 수량}는 0-based col index
+    const blank = new Set([null, '', 0, '-', '—']);
+    for (let R = startRow0; R >= Math.max(0, startRow0 - maxScan); R--){
+      const pname = safeGet(ws[XLSX.utils.encode_cell({r:R, c:colMap['품명']})], 'v');
+      if (!String(pname||'').trim()) continue;
+      const unit  = safeGet(ws[XLSX.utils.encode_cell({r:R, c:colMap['단위']})], 'v');
+      const qty   = safeGet(ws[XLSX.utils.encode_cell({r:R, c:colMap['수량']})], 'v');
+      const s = String(pname||'').replace(/\s|\u3000/g,'');
+      if (blank.has(unit) && blank.has(qty) && !s.includes('합계')) return R; // 0-based header row
+    }
+    return null;
+  }
+  function buildHeaderKey(ws, row0, colMap){
+    const pname = normWS(safeGet(ws[XLSX.utils.encode_cell({r:row0, c:colMap['품명']})], 'v'));
+    let spec  = normWS(safeGet(ws[XLSX.utils.encode_cell({r:row0, c:colMap['규격']})], 'v'));
+    if (!spec) {
+      // 연속 공백(전각 포함) 2개 이상 기준 분할: "품명  규격"
+      const toks = String(pname||'').split(/[\u3000 ]{2,}/).map(s=>s.trim()).filter(Boolean);
+      if (toks.length >= 2){ return `${toks[0]}|${toks[1]}`; }
+    }
+    return `${pname}|${spec}`.replace(/^\|+|\|+$/g,'');
+  }
+  function normalizeSheetName(s){
+    return String(s ?? '')
+      .replace(/^'+|'+$/g, '')
+      .trim()
+      .toLowerCase();
+  }
   function findHeaderRowAndCols(ws, wants, scanRows=12, scanCols=40){
     // ws: SheetJS worksheet, wants: string[] of logical labels (keys in LABELS_COMMON)
     // returns {headerRow, colMap:{want->colIndex(number starting 0)}} or null
@@ -279,98 +307,63 @@
   // ------------------------------
 // 검사 B: 일위대가목록 ↔ 일위대가 — 파이썬(run_check_B) 정합
 // 검사 B : 일위대가목록 ↔ 일위대가 (PY run_check_B 동일 로직)
-function checkB(wb) {
-  const S_C = getSheetCaseInsensitive(wb, '일위대가목록'); // 목록
-  const S_A = getSheetCaseInsensitive(wb, '일위대가');     // 본체
+function checkB(wb){
+  const S_C = getSheetCaseInsensitive(wb,'일위대가목록');
+  const S_A = getSheetCaseInsensitive(wb,'일위대가');
   const out = [];
-  if (!S_C || !S_A) return { name: 'B', rows: [], summary: { note: '필수 시트 미존재' } };
+  if (!S_C || !S_A) return {name:'B', rows:[], summary:{note:'필수 시트 미존재'}};
 
-  const Cdef = findHeaderRowAndCols(S_C, ['품명', '규격', '단위']);
-  const Adef = findHeaderRowAndCols(S_A, ['품명', '규격', '단위', '수량']);
-  if (!Cdef || !Adef) return { name: 'B', rows: [], summary: { note: '헤더 미검출' } };
+  // PY와 동일하게: 목록은 품명/규격만 필수, 일위대가는 품명/규격/단위/수량
+  const Cdef = findHeaderRowAndCols(S_C, ['품명','규격']);
+  const Adef = findHeaderRowAndCols(S_A, ['품명','규격','단위','수량']);
+  if (!Cdef || !Adef) return {name:'B', rows:[], summary:{note:'헤더 미검출'}};
 
-  const Cmap = buildRowKeyMap(S_C, Cdef.headerRow, Cdef.colMap, { left: '품명', right: '규격' });
-  const ulName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb, n) === S_A) || '일위대가';
-  const listName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb, n) === S_C) || '일위대가목록';
+  // 키 맵(행→"품명|규격"), 기존 구조 유지
+  const Cmap = buildRowKeyMap(S_C, Adef ? Cdef.headerRow : Cdef.headerRow, Cdef.colMap, {left:'품명', right:'규격'});
+  const Amap = buildRowKeyMap(S_A, Adef.headerRow, Adef.colMap, {left:'품명', right:'규격'});
+
+  // 시트 실명 확보(자기 시트명 / 일위대가 시트명) → 필터에 사용
+  const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_C) || '일위대가목록';
+  const Aname   = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S_A) || '일위대가';
+
   const range = XLSX.utils.decode_range(S_C['!ref']);
 
-  let checkedRefs = 0; // B_참조셀
-  let mappedRows = 0;  // B_매핑된_행
-  let mismatches = 0;  // B_불일치
+  // PY처럼 전열 스캔
+  const colsToScan = [];
+  for (let c = 0; c <= range.e.c; c++) colsToScan.push(c);
 
-  for (let R = Cdef.headerRow + 1; R <= range.e.r; R++) {
-    const excelRow = R + 1;
+  for (let R = Cdef.headerRow+1; R <= range.e.r; R++){
+    const excelRow = R+1;
     const myKey = Cmap.get(excelRow);
     if (!myKey) continue;
 
-    // (1) 해당 행 전체 스캔하여 "일위대가"로 향하는 참조 수식 수집
-    const refsAll = collectRowRefs(S_C, R, Array.from({ length: range.e.c + 1 }, (_, c) => c), listName);
-    const refsToUL = refsAll.filter(r => r.sheet.toLowerCase() === ulName.toLowerCase());
-    if (!refsToUL.length) continue;
-    checkedRefs += refsToUL.length;
+    const refsAll = collectRowRefs(S_C, R, colsToScan, selfName);
+    const refsToA = refsAll.filter(r => normalizeSheetName(r.sheet) === normalizeSheetName(Aname));
+    if (!refsToA.length) continue;
 
-    // (2) 대표 참조 행(최빈값) 선택
-    const rep = mostFrequentRef(refsToUL);
+    const rep = mostFrequentRef(refsToA);
     if (!rep) continue;
 
-    // (3) 대표 참조행 기준으로 위로 "헤더처럼 보이는" 줄 탐색 (PY header_row_nearest)
-    let headerRowLike = null;
-    for (let r = rep.row - 1, step = 0; r >= 0 && step < 40; r--, step++) {
-      const pname = normWS(safeGet(S_A[XLSX.utils.encode_cell({ r, c: Adef.colMap['품명'] })], 'v'));
-      const gname = normWS(safeGet(S_A[XLSX.utils.encode_cell({ r, c: Adef.colMap['규격'] })], 'v'));
-      const unit = normWS(safeGet(S_A[XLSX.utils.encode_cell({ r, c: Adef.colMap['단위'] })], 'v'));
-      const qty = normWS(safeGet(S_A[XLSX.utils.encode_cell({ r, c: Adef.colMap['수량'] })], 'v'));
-      if (pname || gname || unit || qty) { headerRowLike = r; break; }
-    }
+    // PY: 참조행 기준 위로 올라가며 '헤더처럼 보이는' 행 찾기 → 그 '헤더행' 자체로 키 구성
+    const headerRowLike = nearestHeaderLikeUp(S_A, rep.row-1, Adef.colMap, 80);
+    const refKey = (headerRowLike != null)
+      ? buildHeaderKey(S_A, headerRowLike, Adef.colMap)
+      : (Amap.get(rep.row) || '');
 
-    // (4) 헤더행에서 직접 UL 키 생성 (PY build_ul_header_key)
-    let ulHdrKey = '';
-    if (headerRowLike != null) {
-      const getAt = (k) => {
-        const c = Adef.colMap[k];
-        if (typeof c !== 'number') return '';
-        return normWS(safeGet(S_A[XLSX.utils.encode_cell({ r: headerRowLike, c })], 'v'));
-      };
-      let pname = getAt('품명');
-      let spec = getAt('규격');
-      if (!spec && pname) {
-        const toks = pname.split(/\s{2,}|\u3000{2,}/).map(s => s.trim()).filter(Boolean);
-        if (toks.length >= 2) { pname = toks[0]; spec = toks[1]; }
-      }
-      ulHdrKey = normWS(`${pname || ''}|${spec || ''}`.replace(/^\|+|\|+$/g, ''));
-      mappedRows++;
-    }
-
-    // (5) 비교 및 결과 판정
-    let status = '일치';
-    if (!ulHdrKey || normWS(ulHdrKey) !== normWS(myKey)) {
-      status = '불일치';
-      if (ulHdrKey) mismatches++;
-    }
-
+    const status = (!refKey || normWS(refKey)!==normWS(myKey)) ? '불일치' : '일치';
     out.push({
-      시트: '일위대가목록',
+      시트:'일위대가목록',
       행: excelRow,
-      '일위대가목록_품명|규격': myKey,
-      대표참조시트: rep.sheet,
-      대표참조행: rep.row,
-      '매핑_헤더행': headerRowLike != null ? headerRowLike + 1 : '',
-      '매핑_헤더_품명|규격': ulHdrKey,
-      '참조셀_수': refsToUL.length,
+      키: myKey,
+      참조시트: Aname,
+      참조행: rep.row,
+      참조키: refKey || '',
       결과: status
     });
   }
 
-  const summary = {
-    검사: 'B',
-    'B_참조셀': checkedRefs,
-    'B_매핑된_행': mappedRows,
-    'B_불일치': mismatches
-  };
-
-  const matches = out.filter(r => r.결과 === '일치');
-  const mism = out.filter(r => r.결과 === '불일치');
-  return { name: 'B', rows: out, summary, matches, mismatches: mism };
+  // 기존 출력 형식 그대로 유지
+  return summarize('B', out);
 }
 
   // ------------------------------
@@ -602,6 +595,7 @@ function checkB(wb) {
     }
   };
 })();
+
 
 
 
