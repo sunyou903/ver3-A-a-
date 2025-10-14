@@ -50,7 +50,7 @@
     경비단가: ['경비','경비 단가','경비 적용단가','경비적용단가'],
     합계단가: ['합계단가','합 계 단 가','총단가','총 단가']
   };
-  function nearestHeaderLikeUp(ws, startRow0, colMap, maxScan=80){
+  function nearestHeaderLikeUp(ws, startRow0, colMap, maxScan=200){
     // ws: SheetJS ws, startRow0: 0-based, colMap: {품명, 단위, 수량}는 0-based col index
     const blank = new Set([null, '', 0, '-', '—']);
     for (let R = startRow0; R >= Math.max(0, startRow0 - maxScan); R--){
@@ -785,6 +785,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
