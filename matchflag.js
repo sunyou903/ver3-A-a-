@@ -83,8 +83,25 @@
     }
     return `${pname}|${spec}`.replace(/^\|+|\|+$/g, '');
   }
+  /** 병합된 셀을 실제 값으로 채워넣는 유틸 */
+  function fillMergedCells(ws) {
+    const merges = ws['!merges'] || [];
+    for (const m of merges) {
+      const topLeft = XLSX.utils.encode_cell({r: m.s.r, c: m.s.c});
+      const val = ws[topLeft]?.v;
+      if (val == null) continue;
+      for (let R = m.s.r; R <= m.e.r; R++) {
+        for (let C = m.s.c; C <= m.e.c; C++) {
+          const addr = XLSX.utils.encode_cell({r:R, c:C});
+          if (!ws[addr]) ws[addr] = {};
+          if (ws[addr].v == null) ws[addr].v = val;
+        }
+      }
+    }
+  }
 
   function findHeaderRowAndCols(ws, wants, scanRows=12, scanCols=40){
+    fillMergedCells(ws);  
     // ws: SheetJS worksheet, wants: string[] of logical labels (keys in LABELS_COMMON)
     // returns {headerRow, colMap:{want->colIndex(number starting 0)}} or null
     const range = XLSX.utils.decode_range(ws['!ref']||'A1:Z100');
@@ -885,6 +902,7 @@ function checkD(wb){
     }
   };
 })();
+
 
 
 
