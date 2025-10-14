@@ -508,99 +508,104 @@ function checkB(wb){
 // ------------------------------
 // 검사 C: 공종별내역서 ↔ 단가대비표 (PY run_check_C 동등 + 참조행 직접키/위로보정)
 // ------------------------------
-
   function checkC(wb){
     const S = getSheetCaseInsensitive(wb,'공종별내역서');
     const T = getSheetCaseInsensitive(wb,'단가대비표');
     const out = [];
     if (!S || !T) return {name:'C', rows:[], summary:{note:'필수 시트 미존재'}};
-
+  
+    // PY와 동일: 공종별내역서는 '품명','규격','합계단가'만 필수
     const wantsS = ['품명','규격','합계단가'];
     const wantsT = ['품명','규격','단위'];
     const Sdef = findHeaderRowAndCols(S, wantsS);
     const Tdef = findHeaderRowAndCols(T, wantsT);
     if (!Sdef || !Tdef) return {name:'C', rows:[], summary:{note:'헤더 미검출'}};
-
+  
+    // 키 맵
     const Smap = buildRowKeyMap(S, Sdef.headerRow, Sdef.colMap, {left:'품명', right:'규격'});
-    const Tmap = buildRowKeyMap(T, Tdef.headerRow, Tdef.colMap, {left:'품명', right:'규격'});
     const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별내역서';
-
+  
+    // 스캔 범위: 행 전체
     const range = XLSX.utils.decode_range(S['!ref']);
-    // 합계단가 열과 그 주변 우측 금액열 위주로 스캔(불필요한 셀 스캔 제거)
-    const colsToScan = new Set();
-    for (let c = 0; c <= range.e.c; c++) colsToScan.add(c);  // 전체 열 스캔
-    const sumCol = Sdef.colMap['합계단가']; // 아래 상수판정 시에만 사용
-
+    const colsToScan = [];
+    for (let c = 0; c <= range.e.c; c++) colsToScan.push(c);
+  
+    const sumCol = Sdef.colMap['합계단가'];   // 상수 판정만 이 열에서 수행
+    const EPS = 1e-9;
+  
+    // PY 스타일 요약 지표
+    let directRefCount = 0;      // 외부참조 보유 행수(검사대상)
+    let matchCount = 0;
+    let mismatchCount = 0;
+    let valueMismatchCount = 0;  // 합계단가 상수 입력 불일치
+  
     for (let R = Sdef.headerRow+1; R <= range.e.r; R++){
       const excelRow = R+1;
-      const myKey = Smap.get(excelRow); if (!myKey) continue;
-      const refs = collectRowRefs(S, R, [...colsToScan], selfName);
+      const myKey = Smap.get(excelRow);
+      if (!myKey) continue;
+  
+      // 행 전체에서 외부참조 수집 → 대표(최빈) 1개
+      const refs = collectRowRefs(S, R, colsToScan, selfName);
       const rep = mostFrequentRef(refs);
-      let status='일치', refKey='', refSheet='', refRow='';
+  
       if (rep){
-        refSheet = rep.sheet; refRow = rep.row;
+        // ✅ 외부참조가 있는 행만 "검사대상"으로 집계
+        directRefCount++;
+  
         const tKey = getKeyFromAnySheet(wb, rep.sheet, rep.row);
-        refKey = tKey||'';
-        if (!tKey || normWS(tKey)!==normWS(myKey)) status='불일치';
+        const refKey = tKey || '';
+        const status = (!tKey || normWS(tKey)!==normWS(myKey)) ? '불일치' : '일치';
+  
+        if (status==='일치') matchCount++; else mismatchCount++;
+  
+        out.push({
+          시트:'공종별내역서',
+          행:excelRow,
+          키:myKey,
+          참조시트:rep.sheet,
+          참조행:rep.row,
+          참조키:refKey,
+          결과:status
+        });
+  
       } else {
-        // 외부참조 없음 → 합계단가 셀만 검사하여 상수 여부 판단
-        if (typeof sumCol==='number'){
+        // ❌ 외부참조가 없는 행은 기본 스킵
+        // 단, 합계단가가 상수(수식X)이고 0이 아니면 불일치로만 기록
+        if (typeof sumCol === 'number'){
           const sumA1 = XLSX.utils.encode_cell({r:R, c:sumCol});
           const scell = S[sumA1];
           const sF = safeGet(scell,'f');
           const sV = Number(safeGet(scell,'v'));
-          const EPS = 1e-9; // 미세 부동소수 오차 허용치
-          if (!sF && Number.isFinite(sV) && Math.abs(sV) > EPS){ status='불일치'; }
+          if (!sF && Number.isFinite(sV) && Math.abs(sV) > EPS){
+            mismatchCount++;
+            valueMismatchCount++;
+            out.push({
+              시트:'공종별내역서',
+              행:excelRow,
+              키:myKey,
+              참조시트:'',
+              참조행:'',
+              참조키:'',
+              결과:'불일치(합계단가 상수)'
+            });
+          }
         }
       }
-      out.push({시트:'공종별내역서', 행:excelRow, 키:myKey, 참조시트:refSheet, 참조행:refRow, 참조키:refKey||'', 결과:status});
     }
-
-    return summarize('C', out);
-  }
-
-  // ------------------------------
-  // 검사 D: 공종별집계표 — 재/노/경 단가 외부참조 대표 ↔ 품명만 느슨 비교
-  // ------------------------------
-  function checkD(wb){
-    const S = getSheetCaseInsensitive(wb,'공종별집계표');
-    const T = getSheetCaseInsensitive(wb,'단가대비표');
-    const out = [];
-    if (!S || !T) return {name:'D', rows:[], summary:{note:'필수 시트 미존재'}};
-
-    const wantsS = ['품명','재료비단가','노무비단가','경비단가'];
-    const wantsT = ['품명','규격'];
-    const Sdef = findHeaderRowAndCols(S, wantsS);
-    const Tdef = findHeaderRowAndCols(T, wantsT);
-    if (!Sdef || !Tdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};
-
-    const Tmap = buildRowKeyMap(T, Tdef.headerRow, Tdef.colMap, {left:'품명', right:'규격'});
-    const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
-
-    // S 시트를 훑으며 재/노/경 단가 셀들의 외부참조 대표를 모으고 품명만 비교
-    const nameCol = Sdef.colMap['품명'];
-    const getNameAt = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
-
-    const targetNameFromKey = k => normWS(String(k||'').split('|')[0]);
-
-    eachCell(S, (cell, A1, R, C)=>{
-      const excelRow = R+1; if (excelRow<=Sdef.headerRow+1) return;
-      if (C!==Sdef.colMap['재료비단가'] && C!==Sdef.colMap['노무비단가'] && C!==Sdef.colMap['경비단가']) return;
-      const myName = getNameAt(R);
-      if (!myName) return;
-      const f = safeGet(cell,'f'); const refs = collectExternalRefs(f, selfName); const rep=mostFrequentRef(refs);
-      let status='일치', refKey='', refSheet='', refRow='';
-      if (rep){
-        refSheet = rep.sheet; refRow = rep.row;
-        const tKey = (rep.sheet.toLowerCase()==='단가대비표') ? Tmap.get(rep.row) : '';
-        refKey = tKey||'';
-        const tName = targetNameFromKey(tKey);
-        if (!tName || tName !== myName) status='불일치';
-      }
-      out.push({시트:'공종별집계표', 행:excelRow, 품명:myName, 단가열:(C===Sdef.colMap['재료비단가']?'재료비':C===Sdef.colMap['노무비단가']?'노무비':'경비'), 참조시트:refSheet, 참조행:refRow, 참조키:refKey||'', 결과:status});
-    });
-
-    return summarize('D', out);
+  
+    // 요약: 파이썬 느낌으로 추가 지표 포함
+    const matches    = out.filter(r=>r.결과==='일치');
+    const mismatches = out.filter(r=>r.결과!=='일치'); // 상수 불일치 포함
+    const summary = {
+      검사:'C',
+      전체: out.length,               // 출력된 행 수(=검사대상+상수불일치)
+      일치: matches.length,
+      불일치: mismatches.length,
+      'C_검사대상_행수(직접참조 보유)': directRefCount,
+      'C_값직접입력_불일치': valueMismatchCount
+    };
+  
+    return {name:'C', rows:out, summary, matches, mismatches};
   }
 
   // ------------------------------
@@ -732,6 +737,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
