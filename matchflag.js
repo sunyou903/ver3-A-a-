@@ -121,6 +121,56 @@
     return {headerRow, colMap};
   }
 
+  // 수식 문자열 f에서 모든 A1 참조를 뽑아내 sheet/row 배열로 반환
+// ===== Utilities: formula reference parser =====
+
+// 수식 문자열 f에서 '시트!A1' 참조들을 추출하여 [{sheet,row}] 반환
+function extractRefsFromFormula(f){
+  const out = [];
+  if (typeof f !== 'string' || !f) return out;
+
+  // 1) '시트명'!A1 (따옴표 O)
+  // 2) 시트명!A1   (따옴표 X)
+  // 3) 영역참조(시트!A1:B3)는 A1만 row로 사용
+  const re = /'(.*?)'!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?|([^\s!'"]+)\s*!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?/g;
+
+  let m;
+  while ((m = re.exec(f)) !== null) {
+    let sheet = (m[1] ?? m[4] ?? '').trim();
+    const rowStr = (m[3] ?? m[6] ?? '').trim();
+    const row = parseInt(rowStr, 10);
+    if (!sheet || !Number.isFinite(row)) continue;
+
+    // Excel은 따옴표 안의 작은따옴표가 두 번('') 들어갈 수 있으므로 복원
+    if (sheet.startsWith("'") && sheet.endsWith("'")) {
+      sheet = sheet.slice(1, -1);
+    }
+    sheet = sheet.replace(/''/g, "'").trim();
+
+    out.push({ sheet, row });
+  }
+  return out;
+}
+
+// (선택 권장) 여러 체크에서 공용으로 쓰는 범용 수집기
+function collectRowRefsGeneric(S, R, cols, selfName){
+  const refs = [];
+  for (const c of cols){
+    const addr = XLSX.utils.encode_cell({r:R, c});
+    const cell = S[addr];
+    if (!cell) continue;
+
+    const f = cell.f; // formula
+    if (f && typeof f === 'string'){
+      const found = extractRefsFromFormula(f);
+      for (const r of found){
+        if (r.sheet && r.sheet !== selfName) refs.push(r); // 자기 시트는 제외
+      }
+    }
+  }
+  return refs;
+}
+
 
   function buildRowKeyMap(ws, headerRow, colMap, keySpec){
     // keySpec: {left:'품명', right:'규격'} 등 논리키
@@ -621,6 +671,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
