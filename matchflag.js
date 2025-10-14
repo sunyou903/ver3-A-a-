@@ -563,54 +563,83 @@ function checkB(wb){
   // 검사 D: 공종별집계표 — 재/노/경 단가 외부참조 대표 ↔ 품명만 느슨 비교
   // ------------------------------
  
+  // ------------------------------
+// 검사 D: 공종별집계표 — 재/노/경 단가 외부참조 대표 ↔ 품명만 느슨 비교
+// (열 단위 유지 + [합계]/소계 행은 위로 헤더 탐색)
+// ------------------------------
   function checkD(wb){
     const S = getSheetCaseInsensitive(wb,'공종별집계표');
     const out = [];
-    if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 시트 미존재'}}; // 안전망
+    if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 시트 미존재'}};
   
-    const wants = ['품명','규격','재료비단가','노무비단가','경비단가'];
-    const Sdef = findHeaderRowAndCols(S, wants);
-    if (!Sdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};  // 안전망
-  
-    // (5) 좌측 품명만 비교: normWS로 정규화
-    const Smap = buildRowKeyMap(S, Sdef.headerRow, Sdef.colMap, {left:'품명', right:'규격'}); // 키는 기존대로
-    const colsToCheck = ['재료비단가','노무비단가','경비단가']
-      .map(k => Sdef.colMap[k]).filter(v => typeof v === 'number');
+    // 공종별집계표에서 필요한 헤더
+    const wantsS = ['품명','재료비단가','노무비단가','경비단가'];
+    const Sdef = findHeaderRowAndCols(S, wantsS);
+    if (!Sdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};
   
     const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
   
-    // (4) 첫 데이터 행 포함: headerRow+1부터 검사, early-return 제거
+    // 좌측 품명 정규화 유틸(원본의 normWS 사용)
+    const leftFromKey = (k)=> normWS(String(k||'').split('|')[0]);
+  
+    // 합계/소계/총계/공란 판단
+    function isSummaryLike(name){
+      const s = String(name ?? "").trim();
+      return !s || /^\[?\s*합계\s*\]?$/.test(s) || /소계|총계/.test(s);
+    }
+  
+    // 내 행의 "비교용 좌측 품명" 얻기:
+    //  - 보통은 현재 행의 품명
+    //  - [합계]/소계/총계/공란이면 위로 올라가서 '가장 가까운 비요약 품명' 사용
+    function getLeftNameForRow(S, R, colMap){
+      const nameCol = colMap['품명'];
+      const curRaw  = safeGet(S[XLSX.utils.encode_cell({r:R, c:nameCol})], 'v');
+      const curName = normWS(curRaw);
+      if (!isSummaryLike(curName)) return curName;
+  
+      // 위로 스캔: 가장 가까운 '비요약' 품명
+      for (let k = R-1; k >= Sdef.headerRow+1; k--){
+        const raw = safeGet(S[XLSX.utils.encode_cell({r:k, c:nameCol})], 'v');
+        const nm  = normWS(raw);
+        if (nm && !isSummaryLike(nm)) return nm;
+      }
+      return curName; // 폴백
+    }
+  
+    // 대상 열(재/노/경)만 검사
+    const targets = [
+      ['재료비', Sdef.colMap['재료비단가']],
+      ['노무비', Sdef.colMap['노무비단가']],
+      ['경비',   Sdef.colMap['경비단가']],
+    ].filter(([_, c]) => Number.isFinite(c));
+  
+    // 시트 범위
     const refRange = XLSX.utils.decode_range(S['!ref']);
+  
     for (let R = Sdef.headerRow + 1; R <= refRange.e.r; R++){
       const excelRow = R + 1;
   
-      const myKey = Smap.get(excelRow);
-      const myName = myKey ? normWS(String(myKey).split('|')[0]) : '';
+      // (5) 좌측 '품명'만 비교 + (합계/소계시) 위로 헤더 탐색
+      const myName = getLeftNameForRow(S, R, Sdef.colMap);
       if (!myName) continue;
   
-      for (const C of colsToCheck){
-        const A1 = XLSX.utils.encode_cell({r:R, c:C});
+      for (const [label, colIdx] of targets){
+        // (4) 첫 데이터 행 포함: early-return 없이 진행
+        const A1 = XLSX.utils.encode_cell({r:R, c:colIdx});
         const cell = S[A1];
-        const f = cell && typeof cell.f==='string' ? cell.f : null;
+        const f = safeGet(cell,'f');
+        if (!f) continue; // (3) 대표참조 없음 → 제외(기록 안 함)
   
-        // (3) 대표 참조 없음은 제외: refs 없으면 push하지 않음
-        if (!f) continue;
+        // 기존 파서 재사용(자기시트 제외)
+        const refs = collectExternalRefs(f, selfName);
+        const rep  = mostFrequentRef(refs);
+        if (!rep) continue; // 최빈 대표 없음 → 제외
   
-        // 기존 파서 재사용 (자기시트 제외)
-        const refsAll = extractRefsFromFormula(f);                         // :contentReference[oaicite:5]{index=5}
-        const selfNorm = normalizeSheetNameForLookup(selfName);            // :contentReference[oaicite:6]{index=6}
-        const refs = refsAll.filter(r => r.sheet &&
-          normalizeSheetNameForLookup(r.sheet).toLowerCase() !== selfNorm.toLowerCase());
-  
-        const rep = mostFrequentRef(refs.map(r => ({sheet:r.sheet, col:'', row:r.row}))); // :contentReference[oaicite:7]{index=7}
-        if (!rep) continue; // 대표 참조 없으면 제외
-  
-        // (2) 단가대비표로 제한 X → 어떤 시트든 키 생성
-        const refKey = getKeyFromAnySheet(wb, rep.sheet, rep.row);        // :contentReference[oaicite:8]{index=8}
-        const tName  = refKey ? normWS(String(refKey).split('|')[0]) : '';
+        // (2) 단가대비표로 제한하지 않음: 어떤 시트든 키 생성
+        const refKey = getKeyFromAnySheet(wb, rep.sheet, rep.row);
+        const tName  = leftFromKey(refKey);
   
         const status = (tName && tName === myName) ? '일치' : '불일치';
-        const label  = (C===Sdef.colMap['재료비단가']?'재료비': C===Sdef.colMap['노무비단가']?'노무비':'경비');
   
         out.push({
           시트: '공종별집계표',
@@ -627,6 +656,7 @@ function checkB(wb){
   
     return summarize('D', out);
   }
+
 
 
   // ------------------------------
@@ -758,6 +788,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
