@@ -576,7 +576,7 @@ function checkB(wb){
           const scell = S[sumA1];
           const sF = safeGet(scell,'f');
           const sV = Number(safeGet(scell,'v'));
-          if (!sF && Number.isFinite(sV) && Math.abs(sV) > EPS){
+          if (!sF && Number.isFinite(sV) && Math.abs(sV) > EPS){ status='불일치'; } else { status='제외'; }
             mismatchCount++;
             valueMismatchCount++;
             out.push({
@@ -606,6 +606,50 @@ function checkB(wb){
     };
   
     return {name:'C', rows:out, summary, matches, mismatches};
+  }
+
+  // ------------------------------
+  // 검사 D: 공종별집계표 — 재/노/경 단가 외부참조 대표 ↔ 품명만 느슨 비교
+  // ------------------------------
+  function checkD(wb){
+    const S = getSheetCaseInsensitive(wb,'공종별집계표');
+    const T = getSheetCaseInsensitive(wb,'단가대비표');
+    const out = [];
+    if (!S || !T) return {name:'D', rows:[], summary:{note:'필수 시트 미존재'}};
+
+    const wantsS = ['품명','재료비단가','노무비단가','경비단가'];
+    const wantsT = ['품명','규격'];
+    const Sdef = findHeaderRowAndCols(S, wantsS);
+    const Tdef = findHeaderRowAndCols(T, wantsT);
+    if (!Sdef || !Tdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};
+
+    const Tmap = buildRowKeyMap(T, Tdef.headerRow, Tdef.colMap, {left:'품명', right:'규격'});
+    const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
+
+    // S 시트를 훑으며 재/노/경 단가 셀들의 외부참조 대표를 모으고 품명만 비교
+    const nameCol = Sdef.colMap['품명'];
+    const getNameAt = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
+
+    const targetNameFromKey = k => normWS(String(k||'').split('|')[0]);
+
+    eachCell(S, (cell, A1, R, C)=>{
+      const excelRow = R+1; if (excelRow<=Sdef.headerRow+1) return;
+      if (C!==Sdef.colMap['재료비단가'] && C!==Sdef.colMap['노무비단가'] && C!==Sdef.colMap['경비단가']) return;
+      const myName = getNameAt(R);
+      if (!myName) return;
+      const f = safeGet(cell,'f'); const refs = collectExternalRefs(f, selfName); const rep=mostFrequentRef(refs);
+      let status='일치', refKey='', refSheet='', refRow='';
+      if (rep){
+        refSheet = rep.sheet; refRow = rep.row;
+        const tKey = (rep.sheet.toLowerCase()==='단가대비표') ? Tmap.get(rep.row) : '';
+        refKey = tKey||'';
+        const tName = targetNameFromKey(tKey);
+        if (!tName || tName !== myName) status='불일치';
+      }
+      out.push({시트:'공종별집계표', 행:excelRow, 품명:myName, 단가열:(C===Sdef.colMap['재료비단가']?'재료비':C===Sdef.colMap['노무비단가']?'노무비':'경비'), 참조시트:refSheet, 참조행:refRow, 참조키:refKey||'', 결과:status});
+    });
+
+    return summarize('D', out);
   }
 
   // ------------------------------
@@ -737,6 +781,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
