@@ -121,6 +121,15 @@
     return {headerRow, colMap};
   }
 
+
+    // 시트명 정규화: 앞뒤 작은따옴표 제거, 트림, 소문자화
+  function normalizeSheetName(s){
+    return String(s ?? '')
+      .replace(/^'+|'+$/g, '')   // '일위대가' → 일위대가
+      .trim()
+      .toLowerCase();
+  }
+
   function buildRowKeyMap(ws, headerRow, colMap, keySpec){
     // keySpec: {left:'품명', right:'규격'} 등 논리키
     const aoa = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
@@ -600,6 +609,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
