@@ -1,102 +1,84 @@
 <!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Matchflag (브라우저 내 처리)</title>
-  <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; }
-    body { margin: 24px; max-width: 980px; }
-    .topbar { display:flex; gap:12px; align-items:center; margin-bottom:16px; }
-    .btn { padding:8px 12px; border:1px solid #ccc; border-radius:10px; cursor:pointer; background:#fff; }
-    .btn:hover { background:#f7f7f7; }
-    pre { white-space:pre-wrap; border:1px solid #eee; padding:10px; border-radius:8px; background:#fafafa; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>다시트 교차검증 · MatchFlag</title>
+<meta name="color-scheme" content="light dark">
+<style>
+:root { --bg:#0b0c10; --panel:#101219; --card:#141820; --text:#e7eaf1; --muted:#9aa3b2; --border:#242a35; --brand:#6e6cff; --accent:#79ffe1; --radius:16px; --shadow:0 8px 24px rgba(0,0,0,.25); }
+:root.light { --bg:#f7f8fb; --panel:#ffffff; --card:#ffffff; --text:#0f172a; --muted:#6b7280; --border:#e7eaf1; --brand:#4f46e5; --accent:#10b981; --shadow:0 12px 30px rgba(20,24,40,.06); }
+*{box-sizing:border-box}
+body{margin:0;background:
+radial-gradient(1100px 600px at 110% -10%, color-mix(in srgb,var(--brand) 12%, transparent), transparent 60%),
+radial-gradient(1200px 800px at -10% 120%, color-mix(in srgb,var(--accent) 10%, transparent), transparent 60%),
+var(--bg);
+color:var(--text); font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif; line-height:1.6}
+.container{max-width:900px;margin:0 auto;padding:24px}
+.nav{position:sticky;top:0;z-index:40;backdrop-filter:saturate(180%) blur(10px);background:color-mix(in srgb,var(--panel) 70%, transparent);border-bottom:1px solid var(--border)}
+.nav-inner{display:flex;align-items:center;justify-content:space-between;padding:12px 24px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800}
+.logo{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--accent));box-shadow:var(--shadow)}
+.toggle{width:48px;height:28px;border-radius:999px;border:1px solid var(--border);background:var(--panel);position:relative;cursor:pointer}
+.dot{position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:999px;background:linear-gradient(135deg,var(--brand),var(--accent));transition:transform .2s ease}
+.toggle.active .dot{transform:translateX(20px)}
+
+
+.card{background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 96%, transparent),var(--card));border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+h1{font-size:clamp(22px,3vw,32px);margin:12px 0 6px}
+
+
+.file{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--panel);color:var(--text)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:12px;border:1px solid color-mix(in srgb,var(--brand) 40%, var(--border));background:linear-gradient(180deg,color-mix(in srgb,var(--brand) 12%, var(--card)),var(--card));color:var(--text);font-weight:700;cursor:pointer;transition:transform .08s ease,border-color .2s ease}
+.btn:hover{transform:translateY(-1px);border-color:var(--brand)}
+.btn.ghost{background:var(--panel);border-color:var(--border);font-weight:600}
+
+
+.log{height:240px;overflow:auto;border:1px dashed color-mix(in srgb,var(--muted) 40%, var(--border));border-radius:12px;background:var(--panel);padding:12px;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;white-space:pre-wrap}
+.hint{font-size:12px;color:var(--muted)}
+</style>
 </head>
 <body>
-  <div class="topbar">
-    <button class="btn" onclick="location.href='./index.html'">← Nb2 페이지로</button>
-    <h1 style="margin:0;">Matchflag – 다시트 교차검증</h1>
-  </div>
-
-  <p>엑셀 업로드 → A검사 실행 → 결과 로그 + (전체/불일치/일치) 엑셀 다운로드</p>
-
-  <div style="margin:12px 0;">
-    <label>파일 업로드</label>
-    <input id="mfFile" type="file" accept=".xlsx,.xlsm,.xls" />
-  </div>
-
-  <button id="mfRun" class="btn">A검사 실행</button>
-
-  <h3>로그</h3>
-  <pre id="mfLog"></pre>
-
-  <!-- SheetJS 먼저 -->
-  <script src="lib/xlsx.full.min.js"></script>
-  <!-- Matchflag 로직 -->
-  <script defer src="matchflag.js"></script>
-
-  <script>
-  (function(){
-    function appendLog(msg){
-      var el = document.getElementById('mfLog');
-      if (!el) return;
-      el.textContent += (el.textContent ? '\n' : '') + msg;
-    }
-    function onFileChange(e){
-      var f = e.target.files && e.target.files[0];
-      if (f) {
-        appendLog('"' + f.name + '" 파일을 확인했습니다.');
-      } else {
-        appendLog('파일 선택이 취소되었습니다.');
-      }
-    }
-    document.addEventListener('DOMContentLoaded', function(){
-      var inp = document.getElementById('mfFile');
-      if (inp) inp.addEventListener('change', onFileChange);
-    });
-  })();
-  </script>
-    <script>
-  (function(){
-    function appendLog(msg){
-      var el = document.getElementById('mfLog');
-      if (!el) return;
-      el.textContent += (el.textContent ? '\n' : '') + msg;
-    }
-  
-    document.addEventListener('DOMContentLoaded', function(){
-      appendLog('페이지 로드 완료. XLSX=' + (window.XLSX ? 'OK' : '미로드'));
-  
-      var inp = document.getElementById('mfFile');
-      if (inp) {
-        inp.addEventListener('change', function(e){
-          var f = e.target.files && e.target.files[0];
-          appendLog(f ? ('"' + f.name + '" 파일을 확인했습니다.') : '파일 선택이 취소되었습니다.');
-        });
-      } else {
-        appendLog('mfFile 입력을 찾지 못했습니다.');
-      }
-  
-      var btn = document.getElementById('mfRun');
-      if (btn) {
-        btn.addEventListener('click', function(){
-          appendLog('A검사 실행 버튼 클릭을 확인했습니다.');
-          if (typeof window.run === 'function') {
-            appendLog('전역 run()을 호출합니다…');
-            try { window.run(); } catch(e){ appendLog('run() 오류: ' + (e.message || e)); }
-          } else {
-            appendLog('전역 run() 함수를 찾을 수 없습니다 (JS에서 내부 바인딩만 있는 상태일 수 있음).');
-          }
-        });
-      } else {
-        appendLog('mfRun 버튼을 찾지 못했습니다.');
-      }
-    });
-  })();
-  </script>
+<header class="nav">
+<div class="nav-inner container">
+<div class="brand"><div class="logo" aria-hidden="true"></div>MatchFlag</div>
+<button id="themeBtn" class="toggle" aria-label="테마 전환"><span class="dot"></span></button>
+</div>
+</header>
 
 
-  
+<main class="container">
+<section class="card">
+<h1>다시트 교차검증</h1>
+<p class="hint">한 파일 내 <em>일위대가/단가대비표/공종별내역서/공종별집계표</em> 등 시트들 간 참조 일관성을 A–E 검사항목으로 확인합니다.</p>
+<div style="display:grid;gap:12px;margin-top:12px;">
+<div>
+<input id="mfFile" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+<button id="mfRun" class="btn" aria-label="검사 실행">검사 실행</button>
+<button id="mfClear" class="btn ghost" aria-label="초기화">초기화</button>
+</div>
+<div id="mfLog" class="log" aria-live="polite">대기 중…</div>
+</div>
+</section>
+</main>
+
+
+<script>
+// Theme
+const root2 = document.documentElement; const btn2 = document.getElementById('themeBtn');
+const setTheme2 = (m)=>{ if(m==='light') root2.classList.add('light'); else root2.classList.remove('light'); localStorage.setItem('mf-theme', m); btn2.classList.toggle('active', m==='light'); };
+setTheme2(localStorage.getItem('mf-theme') || (matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));
+btn2.addEventListener('click',()=> setTheme2(root2.classList.contains('light')?'dark':'light'));
+
+
+// UX helpers (기존 matchflag.js가 전역 window.run()을 노출한다고 가정)
+const mfLog = document.getElementById('mfLog');
+document.getElementById('mfClear').addEventListener('click',()=>{ document.getElementById('mfFile').value=''; mfLog.textContent='초기화됨'; });
+document.getElementById('mfRun').addEventListener('click',()=>{ if(typeof window.run==='function'){ try{ window.run(); }catch(e){ mfLog.textContent='실행 중 오류: '+e.message; } } else { mfLog.textContent='(참고) matchflag.js가 로딩되면 여기서 실행을 위임합니다.'; } });
+</script>
+<script src="lib/xlsx.full.min.js"></script>
+<script src="matchflag.js"></script>
 </body>
 </html>
