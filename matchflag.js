@@ -568,168 +568,79 @@ function checkB(wb){
 // 검사 D (공종별집계표): 열 단위 유지 + 합계행 헤더탐색 + 진단 카운터
 // ------------------------------
   function checkD(wb){
+    // 공종별집계표의 단가 3열(재/노/경) 각각에 대해,
+    // 참조된 셀의 시트/행을 모으고 대표를 뽑은 다음
+    // '단가대비표'라면 헤더 위로 탐색해 키를 만든 후 품명(좌측) 기준으로 비교한다.
     const S = getSheetCaseInsensitive(wb,'공종별집계표');
+    const T = getSheetCaseInsensitive(wb,'단가대비표');
     const out = [];
-    if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 시트 미존재'}};
+    if (!S || !T) return {name:'D', rows:[], summary:{note:'필수 시트 미존재'}};
   
-    // 1) 헤더 인식(공백 유/무 모두 시도) + 보조 헤더(구분/공정명) 포함
-    const wants = ['품명','규격','구분','공정명','재료비 단가','노무비 단가','경비 단가','재료비단가','노무비단가','경비단가'];
-    const Sdef = findHeaderRowAndCols(S, wants);
-    if (!Sdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};
+    const wantsS = ['품명','재료비단가','노무비단가','경비단가'];
+    const wantsT = ['품명','규격'];
+    const Sdef = findHeaderRowAndCols(S, wantsS);
+    const Tdef = findHeaderRowAndCols(T, wantsT);
+    if (!Sdef || !Tdef) return {name:'D', rows:[], summary:{note:'헤더 미검출'}};
   
-    const sheetName = getSheetNameFromObj(wb, S) || '공종별집계표';
-    const leftFromKey = (k)=> normWS(String(k||'').split('|')[0]);
+    const Tmap = buildRowKeyMap(T, Tdef.headerRow, Tdef.colMap, {left:'품명', right:'규격'});
+    const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
   
-    // ---- 진단용 카운터 ----
-    let cnt_rows = 0, cnt_targets_missing = 0, cnt_noFormula = 0, cnt_selfFiltered = 0, cnt_noRep = 0;
+    const nameCol = Sdef.colMap['품명'];
+    const getNameAt = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
+    const targetNameFromKey = k => normWS(String(k||'').split('|')[0]);
   
-    // 합계/소계/총계/공란 감지
-    function isSummaryLike(name){
-      const s = String(name ?? '').trim();
-      return !s || /^\[?\s*합계\s*\]?$/.test(s) || /소계|총계/.test(s);
-    }
+    eachCell(S, (cell, A1, R, C)=>{
+      const excelRow = R+1;
+      if (excelRow <= Sdef.headerRow+1) return;
   
-    // 셀 값/수식 안전 접근
-    const getCell = (r,c)=>{
-      if (!Number.isFinite(c)) return {v:'', f:null};
-      const a1 = XLSX.utils.encode_cell({r, c});
-      const cell = S[a1] || {};
-      // 일부 파일은 수식이 v에 "=..." 형태로만 있음 → 둘 다 케어
-      const f = typeof cell.f === 'string' ? cell.f : (typeof cell.v==='string' && cell.v.startsWith('=') ? cell.v : null);
-      return { v: safeGet(cell,'v'), f };
-    };
+      const isTargetCol = (
+        C===Sdef.colMap['재료비단가'] ||
+        C===Sdef.colMap['노무비단가'] ||
+        C===Sdef.colMap['경비단가']
+      );
+      if (!isTargetCol) return;
   
-    // 품명/규격/구분 컬럼
-    const col = (A,B)=> (Sdef.colMap[A] ?? Sdef.colMap[B]);
-    const COLS = {
-      품명: Sdef.colMap['품명'],
-      규격: Sdef.colMap['규격'],
-      구분: (Sdef.colMap['구분'] ?? Sdef.colMap['공정명']),
-      재료: col('재료비 단가','재료비단가'),
-      노무: col('노무비 단가','노무비단가'),
-      경비: col('경비 단가','경비단가'),
-    };
+      const myName = getNameAt(R);
+      if (!myName) return;
   
-    // 대상 단가열 구성(하나도 못 찾으면 바로 진단 리턴)
-    const targets = [
-      ['재료비', COLS.재료],
-      ['노무비', COLS.노무],
-      ['경비',   COLS.경비],
-    ].filter(([_, c]) => Number.isFinite(c));
-    if (targets.length === 0){
-      return {name:'D', rows:[], summary:{note:'단가열 미검출(헤더 표기 확인 필요: 재료비 단가/재료비단가 등)'}};
-    }
+      const f = safeGet(cell,'f');
+      const refs = collectExternalRefs(f, selfName);     // 수식에서 (시트,행) 목록 추출
+      const rep = mostFrequentRef(refs);                 // 대표 참조 1개 선택
   
-    // 합계행: 검사 B의 헤더탐색 유틸 우선 + 폴백
-    function tryKeyFromHeaderOrSame(sheetOrWb, arg1, arg2){
-      if (typeof keyFromHeaderOrSame !== 'function') return null;
-      try {
-        if (arg2 != null) return keyFromHeaderOrSame(wb, arg1, arg2); // (wb, sheetName, row)
-        return keyFromHeaderOrSame(sheetOrWb, arg1);                  // (S, row)
-      } catch(e){ return null; }
-    }
-    function getLeftNameForRow(R){
-      const nameCell = getCell(R, COLS.품명);
-      const curName  = normWS(nameCell.v);
-      if (!isSummaryLike(curName)) return curName;
+      let status='일치', refKey='', refSheet='', refRow='';
+      if (rep){
+        refSheet = rep.sheet; refRow = rep.row;
   
-      // 1) 헤더탐색 유틸 호출 (시그니처 2종 지원)
-      let key = tryKeyFromHeaderOrSame(S, R);
-      if (!key) key = tryKeyFromHeaderOrSame(wb, sheetName, R);
-      if (key) return leftFromKey(key);
-  
-      // 2) 폴백: 구분 열에서 위로 가장 가까운 텍스트
-      if (Number.isFinite(COLS.구분)){
-        for (let k = R-1; k >= Sdef.headerRow+1; k--){
-          const gv = normWS(getCell(k, COLS.구분).v);
-          if (gv) return gv;
-        }
-      }
-      // 3) 폴백: 품명 열에서 위로 가장 가까운 비요약 텍스트
-      for (let k = R-1; k >= Sdef.headerRow+1; k--){
-        const nv = normWS(getCell(k, COLS.품명).v);
-        if (nv && !isSummaryLike(nv)) return nv;
-      }
-      return curName; // 최종 폴백
-    }
-  
-    // 행 범위 계산(시트에 '!ref' 없을 가능성 방지)
-    let startR = Sdef.headerRow + 1;
-    let endR = (S['!ref'] ? XLSX.utils.decode_range(S['!ref']).e.r : (S.maxRow ? S.maxRow-1 : startR-1));
-    if (endR < startR) endR = startR; // 최소 보정
-  
-    const selfNorm = normalizeSheetNameForLookup(sheetName).toLowerCase();
-  
-    for (let R = startR; R <= endR; R++){
-      cnt_rows++;
-      const excelRow = R + 1;
-      const myName = getLeftNameForRow(R);
-      if (!myName) continue;
-  
-      for (const [label, cIdx] of targets){
-        const {v, f} = getCell(R, cIdx);
-  
-        // (중요) 수식이 없다면 제외(값만 있는 셀은 외부참조X)
-        if (!f){ cnt_noFormula++; continue; }
-  
-        // 기존 수식 파서 재사용
-        const refsAll = extractRefsFromFormula(f); // [{sheet,row,col?}, ...]
-        // 자기시트 참조 제외
-        const refs = refsAll.filter(r => r.sheet && normalizeSheetNameForLookup(r.sheet).toLowerCase() !== selfNorm);
-        if (refsAll.length > 0 && refs.length === 0){ cnt_selfFiltered++; }
-  
-        const rep = mostFrequentRef(refs.map(r => ({sheet:r.sheet, row:r.row})));
-        if (!rep){ cnt_noRep++; continue; }
-  
-        // 어떤 시트든 헤더우선 키 생성(B 유틸 우선, 폴백 anySheet)
-        let refKey = null;
-        const T = getSheetCaseInsensitive(wb, rep.sheet) || wb[rep.sheet] || sheetByName(rep.sheet);
-        refKey = tryKeyFromHeaderOrSame(T, rep.row) || tryKeyFromHeaderOrSame(wb, rep.sheet, rep.row);
-        if (!refKey && typeof getKeyFromAnySheet === 'function'){
-          try { refKey = getKeyFromAnySheet(wb, rep.sheet, rep.row); } catch(e){}
+        // 검사 B와 동일: '단가대비표'면 참조행 위로 헤더 탐색해서 키 생성
+        let tKey = '';
+        if (String(rep.sheet||'').toLowerCase() === '단가대비표'){
+          const headerRowLike = nearestHeaderLikeUp(T, rep.row-1, Tdef.colMap, 80);
+          tKey = (headerRowLike!=null)
+            ? buildHeaderKey(T, headerRowLike, Tdef.colMap)
+            : (Tmap.get(rep.row) || '');
+        } else {
+          // 다른 시트면 동일행 키 시도(필요 시 추가 보정 가능)
+          tKey = '';
         }
   
-        const tName = leftFromKey(refKey);
-        const status = (tName && tName === myName) ? '일치' : '불일치';
-  
-        out.push({
-          시트: '공종별집계표',
-          행: excelRow,
-          품명: myName,
-          단가열: label,
-          참조시트: rep.sheet,
-          참조행: rep.row,
-          참조키: refKey || '',
-          결과: status
-        });
+        refKey = tKey || '';
+        const tName = targetNameFromKey(tKey);
+        if (!tName || tName !== myName) status='불일치';
       }
-    }
   
-    // 진단 정보 포함 요약
-    const summary = summarize('D', out);
-    summary.debug = {
-      scanned_rows: cnt_rows,
-      targets_found: targets.map(t=>t[0]).join(','),
-      skipped_no_formula: cnt_noFormula,
-      filtered_self_refs: cnt_selfFiltered,
-      skipped_no_rep: cnt_noRep
-    };
-    // targets가 하나도 없으면 플래그
-    if (targets.length === 0) { cnt_targets_missing = 1; }
-    if (cnt_targets_missing) summary.note = '단가열 인식 실패 가능성';
+      out.push({
+        시트:'공종별집계표',
+        행:excelRow,
+        품명:myName,
+        단가열:(C===Sdef.colMap['재료비단가']?'재료비':C===Sdef.colMap['노무비단가']?'노무비':'경비'),
+        참조시트:refSheet,
+        참조행:refRow,
+        참조키:refKey||'',
+        결과:status
+      });
+    });
   
-    return { name:'D', rows: out, summary };
-  }
-  
-  /* ---- 보조: 원래 코드에 있을 법한 유틸 ---- */
-  function getSheetNameFromObj(wb, S){
-    if (!wb || !S) return null;
-    if (wb.SheetNames && wb.SheetNames.length){
-      for (const n of wb.SheetNames){
-        if (getSheetCaseInsensitive(wb, n) === S) return n;
-      }
-    }
-    return S.name || null;
+    return summarize('D', out);
   }
 
   // ------------------------------
@@ -861,6 +772,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
