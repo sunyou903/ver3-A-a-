@@ -128,42 +128,59 @@
     const out = [];
     if (typeof f !== 'string' || !f) return out;
   
-    // 1) '시트명'!A1  (따옴표 O)
-    // 2) 시트명!A1    (따옴표 X)
-    // 3) 영역 참조 시 시트명!A1:B3 -> A1만 row로 사용
-    // 4) 함수(ROUND, TRUNC, IFERROR, SUM 등)는 무시: 정규식이 A1패턴만 잡음
-    const re = /'(.*?)'!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?|([^\s!'"]+)\s*!\s*([A-Z]{1,3})(\d+)(?::[A-Z]{1,3}\d+)?/g;
+    // 'Sheet Name'!A1  |  [Book]Sheet!A1  |  Sheet!A1
+    // (영역 참조는 첫 셀만 row 취득; $ 절대참조 허용)
+    const re = /'(.*?)'\s*!\s*\$?([A-Z]{1,3})\$?(\d+)(?::[A-Z]{1,3}\d+)?|(?:\[[^\]]+\])?([^\s!'"\(]+)\s*!\s*\$?([A-Z]{1,3})\$?(\d+)(?::[A-Z]{1,3}\d+)?/g;
   
     let m;
     while ((m = re.exec(f)) !== null) {
-      const sheet = (m[1] ?? m[4] ?? '').trim();
+      // 그룹 1: 따옴표 시트 / 그룹 4: 비따옴표 시트
+      let rawSheet = (m[1] ?? m[4] ?? '').trim();
+      // 열/행 (2,3) 또는 (5,6)
       const rowStr = (m[3] ?? m[6] ?? '').trim();
       const row = parseInt(rowStr, 10);
+  
+      // 시트명 정규화(함수 래핑, =, [Book] 등 제거)
+      const sheet = normalizeSheetNameForLookup(rawSheet);
+  
       if (sheet && Number.isFinite(row)) {
         out.push({ sheet, row });
       }
     }
     return out;
   }
-  
+
   // (선택 권장) 여러 체크에서 공용으로 쓰는 범용 수집기
-  function collectRowRefsGeneric(S, R, cols, selfName){
+  function collectRowRefs(ws, R, cols, selfName){
     const refs = [];
+    if (!ws || !Array.isArray(cols) || cols.length===0) return refs;
+  
+    const selfNorm = normalizeSheetNameForLookup(selfName || '');
+  
     for (const c of cols){
       const addr = XLSX.utils.encode_cell({r:R, c});
-      const cell = S[addr];
-      if (!cell) continue;
+      const cell = ws[addr];
+      const f = cell && typeof cell.f==='string' ? cell.f : null;
+      if (!f) continue;
   
-      const f = cell.f; // formula
-      if (f && typeof f === 'string'){
-        const found = extractRefsFromFormula(f);
-        for (const r of found){
-          if (r.sheet && r.sheet !== selfName) refs.push(r); // 자기 시트는 제외
-        }
+      const found = extractRefsFromFormula(f);
+      for (const r of found){
+        const sheetNorm = normalizeSheetNameForLookup(r.sheet);
+        if (!sheetNorm) continue;
+        if (selfNorm && sheetNorm.toLowerCase() === selfNorm.toLowerCase()) continue;
+        refs.push({ sheet: sheetNorm, row: r.row });
       }
     }
-    return refs;
+  
+    // 중복 제거
+    const uniq = []; const seen = new Set();
+    for (const it of refs){
+      const key = `${it.sheet}#${it.row}`;
+      if (!seen.has(key)){ seen.add(key); uniq.push(it); }
+    }
+    return uniq;
   }
+
 
 // 행 R(0-based)에서 지정한 열들(cols 배열)의 모든 수식을 훑어 외부 참조 목록을 수집
 // selfName: 현재 검사 대상 시트 이름(자기참조 제외 목적)
@@ -277,6 +294,35 @@
     if (!def) return '';
     const map = buildRowKeyMap(ws, def.headerRow, def.colMap, {left:'품명', right:'규격'});
     return map.get(row1) || '';
+  }
+
+
+  // "[원본.xlsx]단가대비표" -> "단가대비표"
+  // "'단가대비표'" -> "단가대비표"
+  // "=TRUNC(단가대비표" -> "단가대비표"
+  // "IFERROR(TRUNC(일위대가목록" -> "일위대가목록"
+  function normalizeSheetNameForLookup(name){
+    let s = String(name ?? '').trim();
+  
+    // 1) 앞/뒤 작은따옴표 제거
+    s = s.replace(/^'+|'+$/g, '');
+  
+    // 2) 수식의 '=' 제거 (있다면)
+    s = s.replace(/^=/, '');
+  
+    // 3) 함수 래핑 제거: FUNC( …  , 중첩 함수도 반복 제거
+    //    예: IFERROR(TRUNC(단가대비표 -> 단가대비표
+    while (/^[A-Za-z_][A-Za-z0-9_]*\(/.test(s)) {
+      s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*\(/, '');
+    }
+  
+    // 4) [통합문서] 접두 제거 (이번 파일에선 없어도 안전)
+    s = s.replace(/^\[[^\]]+\]/, '');
+  
+    // 5) 잔여 공백/괄호 정리
+    s = s.replace(/^\s+/, '').replace(/\s+$/, '');
+    s = s.replace(/^\(+/, ''); // 혹시 남은 여는 괄호
+    return s.trim();
   }
 
   // ------------------------------
@@ -686,6 +732,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
