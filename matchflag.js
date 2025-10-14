@@ -567,94 +567,194 @@ function checkB(wb){
  // ------------------------------
 // 검사 D (공종별집계표): 열 단위 유지 + 합계행 헤더탐색 + 진단 카운터
 // ------------------------------
-  function checkD(wb){
-    // 1) 시트 준비
-    const S = getSheetCaseInsensitive(wb,'공종별집계표');
-    if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 미존재'}};
-  
-    // 공종별집계표는 품명 + 3개 단가열 필요
-    const Sdef = findHeaderRowAndCols(S, ['품명','재료비단가','노무비단가','경비단가']);
-    if (!Sdef) return {name:'D', rows:[], summary:{note:'공종별집계표 헤더 미검출'}};
-  
-    const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
-    const nameCol = Sdef.colMap['품명'];
-    const getMyName = (r)=>{ const a1=XLSX.utils.encode_cell({r, c:nameCol}); return normWS(safeGet(S[a1],'v')); };
-  
-    // 2) 대상(참조) 시트 공통 정의: B와 동일하게 품명/규격/단위/수량을 요구
-    const wantsT = ['품명','규격','단위','수량'];
-  
-    // B와 같은 캐시 패턴
-    const targetCache = new Map(); // sheetName -> {ws, def, rowKeyMap}
-    const getTargetDef = (sheetName)=>{
-      if (!sheetName) return null;
-      const key = String(sheetName);
-      if (targetCache.has(key)) return targetCache.get(key);
-      const ws = getSheetCaseInsensitive(wb, sheetName);
-      if (!ws){ targetCache.set(key, null); return null; }
-      const def = findHeaderRowAndCols(ws, wantsT);
-      const rowKeyMap = def ? buildRowKeyMap(ws, def.headerRow, def.colMap, {left:'품명', right:'규격'}) : null;
-      const pack = {ws, def, rowKeyMap};
-      targetCache.set(key, pack);
-      return pack;
-    };
-  
-    const out = [];
-    eachCell(S, (cell, A1, R, C)=>{
-      const excelRow = R+1;
-      if (excelRow <= Sdef.headerRow+1) return;
-  
-      // 3) 3개 단가열만 검사 (재/노/경)
-      const isTargetCol = (
-        C===Sdef.colMap['재료비단가'] ||
-        C===Sdef.colMap['노무비단가'] ||
-        C===Sdef.colMap['경비단가']
-      );
-      if (!isTargetCol) return;
-  
-      const myName = getMyName(R);
-      if (!myName) return;
-  
-      // 4) 수식에서 외부 참조 모아 대표 참조 1개 선택 (B와 동일)
-      const f = safeGet(cell,'f');
-      const refs = collectExternalRefs(f, selfName);
-      const rep = mostFrequentRef(refs);
-      let status='일치', refKey='', refSheet='', refRow='';
-  
-      if (rep){
-        refSheet = rep.sheet; refRow = rep.row;
-  
-        // 5) B와 동일한 “윗방향 헤더 탐색” + 동일행 폴백
-        let tKey = '';
-        const pack = getTargetDef(rep.sheet);
-        if (pack && pack.def){
-          const headerRowLike = nearestHeaderLikeUp(pack.ws, rep.row-1, pack.def.colMap, 80); // ← B와 동일 유틸
-          tKey = (headerRowLike!=null)
-            ? buildHeaderKey(pack.ws, headerRowLike, pack.def.colMap)      // 헤더행 자체로 키 구성
-            : (pack.rowKeyMap ? (pack.rowKeyMap.get(rep.row) || '') : ''); // 폴백: 동일행 키
-        }
+ // D 검사 (B와 동일한 스타일 + 헤더 판정 강화)
+// - 공종별집계표의 재/노/경 각 열에서 외부 참조를 모아 대표(시트,행) 선택
+// - 대표 참조 시트에서 "윗방향"으로 헤더처럼 보이는 행을 탐색(강화 조건)
+// - 헤더 행의 품명|규격 키를 만들어 공종별집계표의 품명(좌측)과 비교
+
+function checkD(wb){
+  const S = getSheetCaseInsensitive(wb,'공종별집계표');
+  if (!S) return {name:'D', rows:[], summary:{note:'공종별집계표 미존재'}};
+
+  const Sdef = findHeaderRowAndCols(S, ['품명','재료비단가','노무비단가','경비단가']);
+  if (!Sdef) return {name:'D', rows:[], summary:{note:'공종별집계표 헤더 미검출'}};
+
+  const MAX_SCAN = 120; // 필요 시 150 등으로 상향 가능
+  const selfName = wb.SheetNames.find(n => getSheetCaseInsensitive(wb,n)===S) || '공종별집계표';
+
+  const nameCol = Sdef.colMap['품명'];
+  const getMyName = (r)=>{
+    const a1 = XLSX.utils.encode_cell({r, c:nameCol});
+    return normWS(safeGet(S[a1],'v'));
+  };
+
+  // ---- 대상(참조) 시트: B와 동일하게 품명/규격/단위/수량을 요구 ----
+  const wantsT = ['품명','규격','단위','수량'];
+
+  // 시트별 캐시
+  const targetCache = new Map(); // sheetName -> {ws, def, rowKeyMap, numericCols}
+  const getTargetDef = (sheetName)=>{
+    if (!sheetName) return null;
+    const key = String(sheetName);
+    if (targetCache.has(key)) return targetCache.get(key);
+
+    const ws = getSheetCaseInsensitive(wb, sheetName);
+    if (!ws){ targetCache.set(key, null); return null; }
+
+    const def = findHeaderRowAndCols(ws, wantsT);
+    const rowKeyMap = def ? buildRowKeyMap(ws, def.headerRow, def.colMap, {left:'품명', right:'규격'}) : null;
+    const numericCols = def ? detectNumericColsAtHeader(ws, def.headerRow) : [];
+    const pack = {ws, def, rowKeyMap, numericCols};
+    targetCache.set(key, pack);
+    return pack;
+  };
+
+  const out = [];
+  eachCell(S, (cell, A1, R, C)=>{
+    const excelRow = R+1;
+    if (excelRow <= Sdef.headerRow+1) return;
+
+    // 재/노/경 단가 열만 검사
+    if (
+      C!==Sdef.colMap['재료비단가'] &&
+      C!==Sdef.colMap['노무비단가'] &&
+      C!==Sdef.colMap['경비단가']
+    ) return;
+
+    const myName = getMyName(R);
+    if (!myName) return;
+
+    const f = safeGet(cell,'f');
+    const refs = collectExternalRefs(f, selfName); // 수식에서 (시트,행) 목록
+    const rep  = mostFrequentRef(refs);           // 대표 참조 1개
+
+    let status='일치', refKey='', refSheet='', refRow='';
+    if (rep){
+      refSheet = rep.sheet; refRow = rep.row;
+
+      const pack = getTargetDef(rep.sheet);
+      if (pack && pack.def){
+        // ---- 강화된 헤더 탐색: 합계류 변형 배제 + 숫자성 컬럼 비어있음 보장 ----
+        const headerRowLike = nearestHeaderLikeUp_Strict(pack.ws, rep.row-1, pack.def, pack.numericCols, MAX_SCAN);
+
+        const tKey = (headerRowLike!=null)
+          ? buildHeaderKey(pack.ws, headerRowLike, pack.def.colMap)      // 헤더행 자체로 키 구성
+          : (pack.rowKeyMap ? (pack.rowKeyMap.get(rep.row) || '') : ''); // 폴백: 동일행 키
+
         refKey = tKey || '';
-  
-        // 6) 비교는 B 철학대로 '품명(좌측)'만
         const tName = String(refKey).split('|')[0]?.trim() || '';
         if (!tName || normWS(tName) !== normWS(myName)) status='불일치';
+      } else {
+        // 대상 시트에서 헤더를 못 찾았거나 구조를 못 읽음
+        status='불일치';
       }
-  
-      out.push({
-        시트:'공종별집계표',
-        행:excelRow,
-        품명:myName,
-        단가열:(C===Sdef.colMap['재료비단가']?'재료비':C===Sdef.colMap['노무비단가']?'노무비':'경비'),
-        참조시트:refSheet,
-        참조행:refRow,
-        참조키:refKey||'',
-        결과:status
-      });
+    }
+
+    out.push({
+      시트:'공종별집계표',
+      행:excelRow,
+      품명:myName,
+      단가열:(C===Sdef.colMap['재료비단가']?'재료비':C===Sdef.colMap['노무비단가']?'노무비':'경비'),
+      참조시트:refSheet,
+      참조행:refRow,
+      참조키:refKey||'',
+      결과:status
     });
-  
-    return summarize('D', out);
+  });
+
+  return summarize('D', out);
+}
+
+/* ===================== 보조 유틸 (강화된 헤더 탐색) ===================== */
+
+// 합계/소계/집계/계 등 변형 문자열(공백·괄호 포함) 배제
+  function isSumLikeName(name){
+    const s = String(name || '')
+      .replace(/\u3000/g,' ')            // 전각공백 -> 보통 공백
+      .replace(/[\s\[\]\(\)\{\}]/g,'');  // 공백/괄호류 제거
+    return s.includes('합계') || s.includes('소계') || s.includes('집계') || s === '계';
   }
-
-
+  
+  // 숫자/빈값 판정
+  function isNumericLike(v){
+    if (v == null) return false;
+    if (typeof v === 'number') return Number.isFinite(v);
+    const s = String(v).replace(/[, \t]/g,'');
+    return /^-?\d+(\.\d+)?$/.test(s);
+  }
+  function asNumber(v){
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (v == null) return null;
+    const s = String(v).replace(/[, \t]/g,'');
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  function isEmptyOrDash(v){
+    const s = normWS(v);
+    return !s || s === '-' || s === '—';
+  }
+  
+  // 라벨행에서 숫자성 컬럼 후보 추출(금액/단가/합계/재·노·경 등)
+  function detectNumericColsAtHeader(ws, headerRow0){
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+    const cols = [];
+    const KW = ['금액','단가','합계','소계','재료비','노무비','경비','직접재료비','노무비합계','경비합계'];
+    for (let c = range.s.c; c <= range.e.c; c++){
+      const t = normWS(safeGet(ws[XLSX.utils.encode_cell({r: headerRow0, c})], 'v'));
+      if (!t) continue;
+      if (t === '품명' || t === '규격' || t === '단위' || t === '수량') continue;
+      if (KW.some(k => t.includes(k))) cols.push(c);
+    }
+    return cols;
+  }
+  
+  // 강화된 후보행 판정 로직
+  function headerCandidateOK(ws, row0, colMap, numericCols){
+    const nameCol = colMap['품명'];
+    const unitCol = colMap['단위'];
+    const qtyCol  = colMap['수량'];
+  
+    // 1) 품명 조건
+    const name = normWS(safeGet(ws[XLSX.utils.encode_cell({r: row0, c: nameCol})], 'v'));
+    if (!name || isSumLikeName(name)) return false;
+  
+    // 2) 단위/수량 조건 (단위는 비거나 '-', '—'; 수량은 비거나 '-', '—' 또는 숫자 0만 허용)
+    if (unitCol != null){
+      const v = safeGet(ws[XLSX.utils.encode_cell({r: row0, c: unitCol})],'v');
+      if (!isEmptyOrDash(v)) return false;
+    }
+    if (qtyCol != null){
+      const v = safeGet(ws[XLSX.utils.encode_cell({r: row0, c: qtyCol})],'v');
+      const n = asNumber(v);
+      const txt = normWS(v);
+      const okQty = (txt==='' || txt==='-' || txt==='—' || n===0);
+      if (!okQty) return false;
+    }
+  
+    // 3) 숫자성 컬럼(금액/단가/합계/재·노·경 등)은 반드시 비어 있어야 함
+    for (const c of numericCols){
+      const v = safeGet(ws[XLSX.utils.encode_cell({r: row0, c})],'v');
+      if (v == null || v === '' || v === '-' || v === '—') continue;
+      if (isNumericLike(v)) return false;   // 숫자/수식 결과처럼 보이면 탈락
+      if (normWS(v)) return false;          // 텍스트라도 값이 있으면 탈락 (SUMIF 등)
+    }
+  
+    return true;
+  }
+  
+  // 강화판: 참조행 바로 위부터 위로 스캔해 "진짜 헤더 같은" 행을 찾음
+  function nearestHeaderLikeUp_Strict(ws, startRow0, tDef, numericCols, maxScan){
+    const { headerRow, colMap } = tDef || {};
+    if (!colMap || headerRow == null) return null;
+  
+    const floor = Math.max(headerRow + 1, startRow0 - (maxScan||120));
+    for (let r = startRow0; r >= floor; r--){
+      if (headerCandidateOK(ws, r, colMap, numericCols)) {
+        return r;
+      }
+    }
+    return null;
+  }
 
   // ------------------------------
   // 검사 E: 단가대비표 — 재료비/노무비 대표 참조 기반 키 비교(장비 단가산출서 특례)
@@ -785,6 +885,7 @@ function checkB(wb){
     }
   };
 })();
+
 
 
 
