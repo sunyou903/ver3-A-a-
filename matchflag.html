@@ -16,7 +16,7 @@ var(--bg);
 color:var(--text); font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif; line-height:1.6}
 .container{max-width:900px;margin:0 auto;padding:24px}
 .nav{position:sticky;top:0;z-index:40;backdrop-filter:saturate(180%) blur(10px);background:color-mix(in srgb,var(--panel) 70%, transparent);border-bottom:1px solid var(--border)}
-.nav-inner{display:flex;align-items:center;justify-content:space-between;padding:12px 24px}
+.nav-inner{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;flex-wrap:wrap;gap:10px}
 .brand{display:flex;align-items:center;gap:10px;font-weight:800}
 .logo{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--accent));box-shadow:var(--shadow)}
 .toggle{width:48px;height:28px;border-radius:999px;border:1px solid var(--border);background:var(--panel);position:relative;cursor:pointer}
@@ -24,16 +24,17 @@ color:var(--text); font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Helve
 .toggle.active .dot{transform:translateX(20px)}
 
 
+nav.links{display:flex;gap:8px;flex-wrap:wrap}
+nav.links a{padding:6px 12px;font-size:14px;border-radius:10px;text-decoration:none;color:var(--text);border:1px solid color-mix(in srgb,var(--border) 60%, var(--text));transition:.15s}
+nav.links a:hover{border-color:var(--brand);color:var(--brand)}
+
+
 .card{background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 96%, transparent),var(--card));border:1px solid var(--border);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
 h1{font-size:clamp(22px,3vw,32px);margin:12px 0 6px}
-
-
 .file{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--panel);color:var(--text)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border-radius:12px;border:1px solid color-mix(in srgb,var(--brand) 40%, var(--border));background:linear-gradient(180deg,color-mix(in srgb,var(--brand) 12%, var(--card)),var(--card));color:var(--text);font-weight:700;cursor:pointer;transition:transform .08s ease,border-color .2s ease}
 .btn:hover{transform:translateY(-1px);border-color:var(--brand)}
 .btn.ghost{background:var(--panel);border-color:var(--border);font-weight:600}
-
-
 .log{height:240px;overflow:auto;border:1px dashed color-mix(in srgb,var(--muted) 40%, var(--border));border-radius:12px;background:var(--panel);padding:12px;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;white-space:pre-wrap}
 .hint{font-size:12px;color:var(--muted)}
 </style>
@@ -42,6 +43,10 @@ h1{font-size:clamp(22px,3vw,32px);margin:12px 0 6px}
 <header class="nav">
 <div class="nav-inner container">
 <div class="brand"><div class="logo" aria-hidden="true"></div>MatchFlag</div>
+<nav class="links">
+<a href="index.html">두 파일 매칭</a>
+<a href="matchflag.html">다시트 검증</a>
+</nav>
 <button id="themeBtn" class="toggle" aria-label="테마 전환"><span class="dot"></span></button>
 </div>
 </header>
@@ -73,7 +78,7 @@ setTheme2(localStorage.getItem('mf-theme') || (matchMedia('(prefers-color-scheme
 btn2.addEventListener('click',()=> setTheme2(root2.classList.contains('light')?'dark':'light'));
 
 
-// UX helpers (기존 matchflag.js가 전역 window.run()을 노출한다고 가정)
+// UX helpers
 const mfLog = document.getElementById('mfLog');
 document.getElementById('mfClear').addEventListener('click',()=>{ document.getElementById('mfFile').value=''; mfLog.textContent='초기화됨'; });
 document.getElementById('mfRun').addEventListener('click',()=>{ if(typeof window.run==='function'){ try{ window.run(); }catch(e){ mfLog.textContent='실행 중 오류: '+e.message; } } else { mfLog.textContent='(참고) matchflag.js가 로딩되면 여기서 실행을 위임합니다.'; } });
