@@ -45,7 +45,17 @@
     .progress{height:10px;border-radius:999px;background:color-mix(in srgb,var(--border) 60%, transparent);overflow:hidden}
     .bar{height:100%;width:0%;background:linear-gradient(90deg,var(--brand),var(--accent));transition:width .3s ease}
     .hint{font-size:12px;color:var(--muted)}
-  </style>
+  
+    /* Drag & Drop */
+    .dropzone{display:flex;align-items:center;justify-content:center;gap:8px;
+      padding:18px;border:2px dashed var(--border);border-radius:12px;background:color-mix(in srgb, var(--panel) 92%, transparent);
+      color:var(--muted); cursor:pointer; transition:border-color .2s ease, background .2s ease}
+    .dropzone:hover{border-color:var(--brand)}
+    .dropzone.dragover{border-color:var(--accent); background:color-mix(in srgb, var(--accent) 6%, var(--panel))}
+    .dropzone .name{color:var(--text); font-weight:600}
+    input.file{display:none}
+    
+</style>
 </head>
 <body>
   <header class="nav">
@@ -70,7 +80,8 @@
           <div class="row">
             <div>
               <label for="fileA">파일 A</label>
-              <input id="fileA" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
+<div id="dropA" class="dropzone" role="button" aria-label="파일 A 드래그&드롭 또는 클릭하여 선택"><span class="hint">여기로 파일을 드래그하거나 클릭해서 선택</span> <span id="nameA" class="name"></span></div>
+<input id="fileA" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
             </div>
             <div>
               <label for="sheetA">시트명 (기본: 단가대비표)</label>
@@ -82,7 +93,8 @@
           <div class="row">
             <div>
               <label for="fileB">파일 B</label>
-              <input id="fileB" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
+<div id="dropB" class="dropzone" role="button" aria-label="파일 B 드래그&드롭 또는 클릭하여 선택"><span class="hint">여기로 파일을 드래그하거나 클릭해서 선택</span> <span id="nameB" class="name"></span></div>
+<input id="fileB" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
             </div>
             <div>
               <label for="sheetB">시트명 (기본: 단가대비표)</label>
@@ -121,7 +133,41 @@
     document.getElementById('clear').addEventListener('click',()=>{ ['fileA','fileB','sheetA','sheetB'].forEach(id=>{const el=document.getElementById(id); if(el && el.type==='file') el.value=''; else if(el) el.value='';}); log.textContent='초기화됨'; bar.style.width='0%'; });
     document.getElementById('run').addEventListener('click',()=>{ if(typeof window.run==='function'){ try{ window.run(); }catch(e){ log.textContent = '실행 중 오류: '+e.message; } } else { log.textContent='(참고) nb2.js가 로딩되면 여기서 자동으로 실행을 위임합니다.'; } });
   </script>
-  <script src="lib/xlsx.full.min.js"></script>
+  
+  <script>
+  // Drag & Drop helpers for index.html
+  function bindDropzone(zoneId, inputId, nameId){
+    const zone = document.getElementById(zoneId);
+    const input = document.getElementById(inputId);
+    const nameEl = document.getElementById(nameId);
+    if(!zone || !input) return;
+    const accept = (input.getAttribute('accept')||'').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);
+
+    function setFile(file){
+      const ok = accept.length===0 || accept.some(ext => file.name.toLowerCase().endsWith(ext));
+      if(!ok){ alert('지원하지 않는 파일 형식입니다: ' + file.name); return; }
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      if(nameEl){ nameEl.textContent = file.name; }
+      const lg = document.getElementById('log');
+      if(lg){ lg.textContent = (lg.textContent||'') + '\n선택됨: ' + file.name; }
+    }
+
+    zone.addEventListener('click', () => input.click());
+    input.addEventListener('change', () => { if(input.files && input.files[0]) setFile(input.files[0]); });
+    ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); zone.classList.add('dragover'); }));
+    ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); zone.classList.remove('dragover'); }));
+    zone.addEventListener('drop', (e)=>{
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if(files && files.length){ setFile(files[0]); }
+    });
+  }
+  bindDropzone('dropA','fileA','nameA');
+  bindDropzone('dropB','fileB','nameB');
+  </script>
+    
+<script src="lib/xlsx.full.min.js"></script>
   <script src="nb2.js"></script>
 </body>
 </html>
