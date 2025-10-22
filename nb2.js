@@ -24,7 +24,7 @@ const LABELS = {
   "경비적용단가": "경비 적용단가",
 };
 
-function log(msg) {
+function appendLog(msg) {
   const el = document.getElementById("log");
   el.textContent += (el.textContent ? "\n" : "") + msg;
 }
@@ -235,24 +235,37 @@ async function run() {
     const fb = document.getElementById("fileB").files[0];
     if (!fa || !fb) throw new Error("두 파일을 모두 선택하세요.");
 
-    const sheetName = (document.getElementById("sheetName").value || "단가대비표").trim();
+    const sheetAEl = document.getElementById("sheetA");
+const sheetBEl = document.getElementById("sheetB");
+let sheetNameA, sheetNameB;
+if (sheetAEl || sheetBEl) {
+  sheetNameA = (sheetAEl?.value || "단가대비표").trim();
+  sheetNameB = (sheetBEl?.value || "단가대비표").trim();
+} else {
+  const legacy = (document.getElementById("sheetName")?.value || "단가대비표").trim();
+  sheetNameA = legacy; sheetNameB = legacy;
+}
+
     const th = Number(document.getElementById("threshold").value || "30");
 
-    log("파일 로딩 중...");
+    appendLog("파일 로딩 중...");
     const [wa, wb] = await Promise.all([readWorkbook(fa), readWorkbook(fb)]);
 
-    log(`시트 파싱: ${sheetName}`);
-    const A = extractCore(sheetToDF(wa, sheetName));
-    const B = extractCore(sheetToDF(wb, sheetName));
-    log(`A행=${A.length}, B행=${B.length}`);
+    appendLog(`시트 파싱: A=${sheetNameA} / B=${sheetNameB}`);
+    const A = extractCore(sheetToDF(wa, sheetNameA));
+    const B = extractCore(sheetToDF(wb, sheetNameB));
+    appendLog(`A행=${A.length}, B행=${B.length}`);
 
     // 라벨 자동 추출은 파일명 키워드로 간소화 (원본 detect_label 개념):contentReference[oaicite:8]{index=8}
     const leftLabel = detectLabel(fa.name) || "왼쪽";
     const rightLabel = detectLabel(fb.name) || "오른쪽";
 
     const rows = matchAndCompare(A, B, th, leftLabel, rightLabel);
-    log(`매칭 결과 행=${rows.length}`);
+    appendLog(`매칭 결과 행=${rows.length}`);
 
+    // ✅ 종합유사도 기준 내림차순 정렬
+    rows.sort((a, b) => (b["종합유사도(%)"] ?? 0) - (a["종합유사도(%)"] ?? 0));
+    
     // 엑셀로 저장
     const aoa = aoaFromObjects(rows);
     // 맨 끝 열에 비교 수식은 엑셀에서만 의미가 있으므로 간단히 TRUE/FALSE 식 추가(원본은 J~N열 기준):contentReference[oaicite:9]{index=9}
@@ -278,10 +291,10 @@ async function run() {
     const outName = `${fa.name.replace(/\.[^.]+$/,'')}_vs_${fb.name.replace(/\.[^.]+$/,'')}.xlsx`;
     XLSX.writeFile(wbOut, outName);
 
-    log(`저장 완료: ${outName}`);
+    appendLog(`저장 완료: ${outName}`);
   } catch (e) {
     console.error(e);
-    log(`ERROR: ${e.message || e}`);
+    appendLog(`ERROR: ${e.message || e}`);
   }
 }
 
@@ -294,5 +307,8 @@ function detectLabel(name) {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("runBtn").addEventListener("click", run);
+  document.getElementById("run")?.addEventListener("click", run);
 });
+
+// 보장: 전역 실행 진입점 노출
+try { window.run = run; } catch (e) { /* noop for non-browser envs */ }
