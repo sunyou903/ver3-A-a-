@@ -48,6 +48,42 @@ h1{font-size:clamp(22px,3vw,32px);margin:12px 0 6px}
     input.file{display:none}
     
 </style>
+
+    <style>
+    .row-between{display:flex;justify-content:space-between;align-items:center;margin:6px 0}
+    .btn{padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);cursor:pointer}
+    .btn.small{padding:6px 10px;font-size:.9em}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .modal.hidden{display:none}
+    .modal{position:fixed;inset:0;z-index:50}
+    .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.4)}
+    .modal-panel{position:absolute;inset:5% 6%;background:var(--panel);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column}
+    .modal-header,.modal-footer{padding:12px 16px;border-bottom:1px solid var(--border)}
+    .modal-footer{border-top:1px solid var(--border);border-bottom:none}
+    .table-wrap{padding:12px 16px;overflow:auto;height:70vh}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--border)}
+    .tab{padding:6px 10px;border:1px solid var(--border);border-radius:10px;cursor:pointer;background:var(--card)}
+    .tab.active{border-color:var(--accent)}
+    table{border-collapse:collapse;font-size:12px}
+    table td, table th{border:1px solid var(--border);padding:4px 6px;white-space:nowrap}
+    .muted{color:var(--muted)}
+    </style>
+    
+
+    <style>
+      .tabs{overflow:auto;white-space:nowrap}
+      .tabs::-webkit-scrollbar{height:8px}
+    </style>
+    
+
+<style>
+/* Ensure sheet tab text is visible */
+.tabs{display:flex;gap:8px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--border);overflow:auto;white-space:normal}
+.tab{padding:6px 10px;border:1px solid var(--border);border-radius:10px;cursor:pointer;background:var(--card);
+     color:var(--text) !important; font-weight:600; line-height:1.2;}
+.tab.active{border-color:var(--accent); color:var(--text) !important;}
+</style>
+
 </head>
 <body>
 <header class="nav">
@@ -68,11 +104,12 @@ h1{font-size:clamp(22px,3vw,32px);margin:12px 0 6px}
 <p class="hint">한 파일 내 <em>일위대가/단가대비표/공종별내역서/공종별집계표</em> 등 시트들 간 참조 일관성을 A–E 검사항목으로 확인합니다.</p>
 <div style="display:grid;gap:12px;margin-top:12px;">
 <div>
+<div class="row-between"><span>엑셀 파일</span><button id="mfPreview" class="btn" type="button">미리보기</button></div>
 <div id="mfDrop" class="dropzone" role="button" aria-label="엑셀 파일 드래그&드롭 또는 클릭하여 선택"><span class="hint">여기로 파일을 드래그하거나 클릭해서 선택</span> <span id="mfName" class="name"></span></div>
 <input id="mfFile" class="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" />
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-<button id="mfRun" class="btn" aria-label="검사 실행">검사 실행</button>
+<button id="mfRun" class="btn" aria-label="검사 실행">검사 실행</button> <button id="resultPreview" class="btn" type="button" disabled>결과 미리보기</button> <button id="resultDownload" class="btn" type="button" disabled>결과 다운로드</button>
 <button id="mfClear" class="btn ghost" aria-label="초기화">초기화</button>
 </div>
 <div id="mfLog" class="log" aria-live="polite">대기 중…</div>
@@ -125,6 +162,290 @@ document.getElementById('mfRun').addEventListener('click',()=>{ if(typeof window
   </script>
     
 <script src="lib/xlsx.full.min.js"></script>
+
+<script>
+// -- Suppress auto-download; enable manual download button instead --
+(function(){
+  function markReady(wb, filename){
+    try{
+      window.__RESULT_WB__ = wb;
+      window.__RESULT_FILENAME__ = filename || 'result.xlsx';
+      window.dispatchEvent(new CustomEvent('result-wb-updated', { detail: { filename: window.__RESULT_FILENAME__ } }));
+    }catch(e){}
+  }
+  function install(){
+    if (!window.XLSX) return false;
+    if (window.__WRITEFILE_SUPPRESSED__) return true;
+    const orig = XLSX.writeFile;
+    if (typeof orig !== 'function') return false;
+    window.__ORIG_WRITEFILE__ = orig;
+    XLSX.writeFile = function(wb, filename, opts){
+      // capture, DO NOT download automatically
+      try { markReady(wb, filename); } catch(e){}
+      return; // prevent auto download
+    };
+    window.__WRITEFILE_SUPPRESSED__ = true;
+    return true;
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', install);
+  } else {
+    install();
+  }
+})();
+</script>
+
+
+    <script>
+    // ---- Capture result workbook for preview ----
+    (function(){
+      function markReady(wb, filename){
+        try{
+          window.__RESULT_WB__ = wb;
+          window.dispatchEvent(new CustomEvent('result-wb-updated', { detail: { filename: filename || '' } }));
+        }catch(e){}
+      }
+      // Patch once after XLSX is available
+      function patchOnce(){
+        if (!window.XLSX || window.__WB_PATCHED__) return !!window.__WB_PATCHED__;
+        window.__WB_PATCHED__ = true;
+        const _writeFile = XLSX.writeFile;
+        const _write = XLSX.write;
+        if (typeof _writeFile === 'function'){
+          XLSX.writeFile = function(wb, filename, opts){
+            try { markReady(wb, filename); } catch(e){}
+            return _writeFile.call(this, wb, filename, opts);
+          };
+        }
+        if (typeof _write === 'function'){
+          XLSX.write = function(wb, opts){
+            try { markReady(wb, (opts && opts.bookSST ? 'result.xlsx' : '')); } catch(e){}
+            return _write.call(this, wb, opts);
+          };
+        }
+      }
+      // Try now, and also on DOM ready
+      const tryPatch = () => { patchOnce(); };
+      if (document.readyState === 'loading'){
+        document.addEventListener('DOMContentLoaded', tryPatch);
+      } else { tryPatch(); }
+    })();
+    </script>
+    
 <script src="matchflag.js"></script>
+
+  <div id="xlPreviewModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-label="엑셀 미리보기">
+      <div class="modal-header">
+        <strong>엑셀 미리보기</strong>
+        <button id="xlPreviewClose" class="btn small" type="button">닫기</button>
+      </div>
+      <div id="xlSheetTabs" class="tabs"></div>
+      <div id="xlPreviewBody" class="table-wrap"></div>
+      <div class="modal-footer">
+        <span class="muted">* 최대 5,000행/20열까지만 미리보기로 표시합니다.</span>
+      </div>
+    </div>
+  </div>
+    
+
+  <script>
+  // ===== Excel Preview (max 200 rows x 50 cols) =====
+  (function(){
+    function openModal(){ document.getElementById('xlPreviewModal').classList.remove('hidden'); }
+    function closeModal(){ document.getElementById('xlPreviewModal').classList.add('hidden'); }
+    function setTabs(names, onClick){
+      const tabs = document.getElementById('xlSheetTabs');
+      tabs.innerHTML = '';
+      names.forEach((nm, idx) => {
+        const b = document.createElement('button');
+        b.className = 'tab' + (idx===0?' active':'');
+        b.textContent = nm;
+        b.addEventListener('click', () => {
+          for(const t of tabs.children){ t.classList.remove('active'); }
+          b.classList.add('active'); onClick(idx);
+        });
+        tabs.appendChild(b);
+      });
+    }
+    function renderTable(data){
+      const maxR = 5000, maxC = 20;
+      const rows = data.slice(0, maxR);
+      const cols = Math.min(Math.max(...rows.map(r => r.length), 0), maxC);
+      let html = '<table><thead><tr>';
+      const header = rows[0] || [];
+      for(let c=0;c<cols;c++){ html += '<th>' + (header[c]??'') + '</th>'; }
+      html += '</tr></thead><tbody>';
+      for(let r=1;r<rows.length;r++){
+        html += '<tr>';
+        for(let c=0;c<cols;c++){ html += '<td>' + (rows[r]?.[c]??'') + '</td>'; }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      return html;
+    }
+    async function fileToWorkbook(file){
+      const buf = await file.arrayBuffer();
+      return XLSX.read(buf, { type: 'array' });
+    }
+    async function previewFromInput(inputId){
+      const input = document.getElementById(inputId);
+      if(!input || !input.files || !input.files[0]){ alert('먼저 파일을 선택하거나 드래그해 주세요.'); return; }
+      const wb = await fileToWorkbook(input.files[0]);
+      const sheetNames = wb.SheetNames;
+      setTabs(sheetNames, (idx) => {
+        const sh = wb.Sheets[sheetNames[idx]];
+        const aoa = XLSX.utils.sheet_to_json(sh, { header: 1, raw: true });
+        document.getElementById('xlPreviewBody').innerHTML = renderTable(aoa);
+      });
+      // initial render
+      const sh0 = wb.Sheets[sheetNames[0]];
+      const aoa0 = XLSX.utils.sheet_to_json(sh0, { header: 1, raw: true });
+      document.getElementById('xlPreviewBody').innerHTML = renderTable(aoa0);
+      openModal();
+    }
+    function bindButtons(){
+      const closeBtn = document.getElementById('xlPreviewClose');
+      if(closeBtn){ closeBtn.addEventListener('click', closeModal); }
+      const modal = document.getElementById('xlPreviewModal');
+      if(modal){ modal.addEventListener('click', (e)=>{ if(e.target === modal || e.target.classList.contains('modal-backdrop')) closeModal(); }); }
+      // page-specific bindings
+      const btnA = document.getElementById('previewA');
+      if(btnA){ btnA.addEventListener('click', ()=> previewFromInput('fileA')); }
+      const btnB = document.getElementById('previewB');
+      if(btnB){ btnB.addEventListener('click', ()=> previewFromInput('fileB')); }
+      const btnMf = document.getElementById('mfPreview');
+      if(btnMf){ btnMf.addEventListener('click', ()=> previewFromInput('mfFile')); }
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bindButtons);
+    } else { bindButtons(); }
+  })();
+  </script>
+    
+
+    <script>
+    (function(){
+      function ensureHelpers(){
+        if (!window.__renderTable){
+          window.__renderTable = function(data){
+            const maxR = 5000, maxC = 20;
+            const rows = data.slice(0, maxR);
+            const cols = Math.min(Math.max(...rows.map(r => r.length), 0), maxC);
+            let html = '<table><thead><tr>';
+            const header = rows[0] || [];
+            for(let c=0;c<cols;c++){ html += '<th>' + (header[c]??'') + '</th>'; }
+            html += '</tr></thead><tbody>';
+            for(let r=1;r<rows.length;r++){
+              html += '<tr>';
+              for(let c=0;c<cols;c++){ html += '<td>' + (rows[r]?.[c]??'') + '</td>'; }
+              html += '</tr>';
+            }
+            html += '</tbody></table>';
+            return html;
+          };
+        }
+        if (!window.__setTabs){
+          window.__setTabs = function(names, onClick){
+            const tabs = document.getElementById('xlSheetTabs');
+            if(!tabs) return;
+            tabs.innerHTML = '';
+            names.forEach((nm, idx) => {
+              const b = document.createElement('button');
+              b.className = 'tab' + (idx===0?' active':'');
+              b.textContent = nm;
+              b.addEventListener('click', () => {
+                for(const t of tabs.children){ t.classList.remove('active'); }
+                b.classList.add('active'); onClick(idx);
+              });
+              tabs.appendChild(b);
+            });
+          };
+        }
+      }
+      function openModal(){ const m = document.getElementById('xlPreviewModal'); if(m) m.classList.remove('hidden'); }
+      function closeModal(){ const m = document.getElementById('xlPreviewModal'); if(m) m.classList.add('hidden'); }
+
+      function previewFromWorkbook(wb){
+        if(!wb){ alert('결과 워크북이 아직 생성되지 않았습니다. 먼저 실행하세요.'); return; }
+        ensureHelpers();
+        const names = wb.SheetNames || [];
+        if(!names.length){ alert('결과 시트가 없습니다.'); return; }
+        __setTabs(names, (idx)=>{
+          const sh = wb.Sheets[names[idx]];
+          const aoa = XLSX.utils.sheet_to_json(sh, { header: 1, raw: true });
+          document.getElementById('xlPreviewBody').innerHTML = __renderTable(aoa);
+        });
+        // initial
+        const sh0 = wb.Sheets[names[0]];
+        const aoa0 = XLSX.utils.sheet_to_json(sh0, { header: 1, raw: true });
+        document.getElementById('xlPreviewBody').innerHTML = __renderTable(aoa0);
+        openModal();
+      }
+
+      function bindResultButton(){
+        const btn = document.getElementById('resultPreview');
+        if(!btn) return;
+        // Enable button when result workbook is set
+        if (window.__RESULT_WB__) btn.disabled = false;
+        window.addEventListener('result-wb-updated', ()=>{ btn.disabled = false; });
+
+        btn.addEventListener('click', ()=>{
+          previewFromWorkbook(window.__RESULT_WB__);
+        });
+
+        // Close handlers if not already wired
+        const closeBtn = document.getElementById('xlPreviewClose');
+        if(closeBtn && !closeBtn.__bound){
+          closeBtn.addEventListener('click', ()=>{
+            closeModal();
+          });
+          closeBtn.__bound = true;
+        }
+        const modal = document.getElementById('xlPreviewModal');
+        if(modal && !modal.__bound){
+          modal.addEventListener('click', (e)=>{
+            if(e.target === modal || e.target.classList.contains('modal-backdrop')) closeModal();
+          });
+          modal.__bound = true;
+        }
+      }
+
+      if (document.readyState === 'loading'){
+        document.addEventListener('DOMContentLoaded', bindResultButton);
+      } else { bindResultButton(); }
+    })();
+    </script>
+    
+
+<script>
+(function(){
+  function bind(){
+    const btn = document.getElementById('resultDownload');
+    if(!btn) return;
+    function setEnabled(){
+      btn.disabled = !window.__RESULT_WB__;
+    }
+    setEnabled();
+    window.addEventListener('result-wb-updated', setEnabled);
+    btn.addEventListener('click', function(){
+      if(!window.__RESULT_WB__){ return; }
+      const save = window.__ORIG_WRITEFILE__ || (XLSX && XLSX.writeFile);
+      if(typeof save === 'function'){
+        const fname = window.__RESULT_FILENAME__ || 'result.xlsx';
+        try { save(window.__RESULT_WB__, fname); }
+        catch(e){ alert('다운로드 중 오류가 발생했습니다: ' + e); }
+      }else{
+        alert('다운로드 함수를 찾을 수 없습니다.');
+      }
+    });
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', bind);
+  } else { bind(); }
+})();
+</script>
+
 </body>
 </html>
