@@ -882,16 +882,16 @@ function checkD(wb){
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, {type:'array', cellFormula:true, cellText:true, cellNF:true});
 
-      log('일위대가 검사 실행…');
-      const ra = checkA(wb); log(`일위대가 검사: 전체 ${ra.summary?.전체||0}, 불일치 ${ra.summary?.불일치||0}`);
-      log('일위대가 목록 검사 실행…');
-      const rb = checkB(wb); log(`일위대가 목록 검사: 전체 ${rb.summary?.전체||0}, 불일치 ${rb.summary?.불일치||0}`);
-      log('공종별내역서 검사 실행…');
-      const rc = checkC(wb); log(`공종별내역서 검사: 전체 ${rc.summary?.전체||0}, 불일치 ${rc.summary?.불일치||0}`);
-      log('공종별집계표 검사 실행…');
-      const rd = checkD(wb); log(`공종별집계표 검사: 전체 ${rd.summary?.전체||0}, 불일치 ${rd.summary?.불일치||0}`);
-      log('단가대비표 검사(건축) 실행…');
-      const re = checkE(wb); log(`단가대비표 검사(건축): 전체 ${re.summary?.전체||0}, 불일치 ${re.summary?.불일치||0}`);
+      log('검사 A 실행…');
+      const ra = checkA(wb); log(`A: 전체 ${ra.summary?.전체||0}, 불일치 ${ra.summary?.불일치||0}`);
+      log('검사 B 실행…');
+      const rb = checkB(wb); log(`B: 전체 ${rb.summary?.전체||0}, 불일치 ${rb.summary?.불일치||0}`);
+      log('검사 C 실행…');
+      const rc = checkC(wb); log(`C: 전체 ${rc.summary?.전체||0}, 불일치 ${rc.summary?.불일치||0}`);
+      log('검사 D 실행…');
+      const rd = checkD(wb); log(`D: 전체 ${rd.summary?.전체||0}, 불일치 ${rd.summary?.불일치||0}`);
+      log('검사 E 실행…');
+      const re = checkE(wb); log(`E: 전체 ${re.summary?.전체||0}, 불일치 ${re.summary?.불일치||0}`);
 
       const resWb = buildResultWorkbook([ra,rb,rc,rd,re]);
       const outName = downloadWorkbook(resWb, file.name.replace(/\.[^.]+$/, '') + '_matchflag');
@@ -902,7 +902,6 @@ function checkD(wb){
     }
   };
 })();
-
 
 
 
