@@ -378,7 +378,7 @@
       const gnameA1 = XLSX.utils.encode_cell({r:R, c:Adef.colMap['규격']});
       const pname = normWS(safeGet(S_A[pnameA1],'v'));
       const gname  = normWS(safeGet(S_A[gnameA1],'v'));
-      const hasPercent = (pname && pname.includes('%')) || (gname && gname.includes('%'));
+      const hasPercent = /[%％]/.test(pname||'') || /[%％]/.test(gname||'');
   
       let foundAnyRef = false;
   
@@ -392,9 +392,9 @@
   
         for (const {sheet, col, row} of refs){
           // 대상 시트 한정: 단가대비표 / 일위대가목록
-          const sheetLower = String(sheet||'').toLowerCase();
-          const isDV = sheetLower === '단가대비표';
-          const isLS = sheetLower === '일위대가목록';
+          + const sheetNorm = normalizeSheetNameForLookup(sheet).toLowerCase();
+          + const isDV = sheetNorm === '단가대비표';
+          + const isLS = sheetNorm === '일위대가목록';
           if (!isDV && !isLS) continue;
   
           foundAnyRef = true;
@@ -426,6 +426,7 @@
           const val = safeGet(qCell,'v');
           const isEmpty = (val===null || val===undefined || val==='' || Number(val)===0);
           if (!isEmpty){
+            const hasPercentInKey = /[%％]/.test(myKey);
             out.push({
               시트: '일위대가',
               행: excelRow,
@@ -433,7 +434,7 @@
               참조시트: '',
               참조셀: '',
               참조키: '',
-              결과: '불일치'
+              결과: hasPercentInKey ? '제외' : '불일치'
             });
           }
         }
@@ -902,6 +903,7 @@ function checkD(wb){
     }
   };
 })();
+
 
 
 
