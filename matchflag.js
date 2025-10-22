@@ -378,7 +378,7 @@
       const gnameA1 = XLSX.utils.encode_cell({r:R, c:Adef.colMap['규격']});
       const pname = normWS(safeGet(S_A[pnameA1],'v'));
       const gname  = normWS(safeGet(S_A[gnameA1],'v'));
-      const hasPercent = /[%％]/.test(pname||'') || /[%％]/.test(gname||'');
+      const hasPercent = (pname && pname.includes('%')) || (gname && gname.includes('%'));
   
       let foundAnyRef = false;
   
@@ -392,9 +392,9 @@
   
         for (const {sheet, col, row} of refs){
           // 대상 시트 한정: 단가대비표 / 일위대가목록
-          + const sheetNorm = normalizeSheetNameForLookup(sheet).toLowerCase();
-          + const isDV = sheetNorm === '단가대비표';
-          + const isLS = sheetNorm === '일위대가목록';
+          const sheetLower = String(sheet||'').toLowerCase();
+          const isDV = sheetLower === '단가대비표';
+          const isLS = sheetLower === '일위대가목록';
           if (!isDV && !isLS) continue;
   
           foundAnyRef = true;
@@ -426,7 +426,6 @@
           const val = safeGet(qCell,'v');
           const isEmpty = (val===null || val===undefined || val==='' || Number(val)===0);
           if (!isEmpty){
-            const hasPercentInKey = /[%％]/.test(myKey);
             out.push({
               시트: '일위대가',
               행: excelRow,
@@ -434,7 +433,7 @@
               참조시트: '',
               참조셀: '',
               참조키: '',
-              결과: hasPercentInKey ? '제외' : '불일치'
+              결과: '불일치'
             });
           }
         }
@@ -883,16 +882,16 @@ function checkD(wb){
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, {type:'array', cellFormula:true, cellText:true, cellNF:true});
 
-      log('일위대가 검사 실행…');
-      const ra = checkA(wb); log(`일위대가 검사: 전체 ${ra.summary?.전체||0}, 불일치 ${ra.summary?.불일치||0}`);
-      log('일위대가 목록 검사 실행…');
-      const rb = checkB(wb); log(`일위대가 목록 검사: 전체 ${rb.summary?.전체||0}, 불일치 ${rb.summary?.불일치||0}`);
-      log('공종별 내역서 검사 실행…');
-      const rc = checkC(wb); log(`공종별 내역서 검사: 전체 ${rc.summary?.전체||0}, 불일치 ${rc.summary?.불일치||0}`);
-      log('공종별 집계표 검사 실행…');
-      const rd = checkD(wb); log(`공종별 집계표 검사: 전체 ${rd.summary?.전체||0}, 불일치 ${rd.summary?.불일치||0}`);
-      log('단가대비표 검사(건축) 실행…');
-      const re = checkE(wb); log(`단가대비표 검사(건축): 전체 ${re.summary?.전체||0}, 불일치 ${re.summary?.불일치||0}`);
+      log('검사 A 실행…');
+      const ra = checkA(wb); log(`A: 전체 ${ra.summary?.전체||0}, 불일치 ${ra.summary?.불일치||0}`);
+      log('검사 B 실행…');
+      const rb = checkB(wb); log(`B: 전체 ${rb.summary?.전체||0}, 불일치 ${rb.summary?.불일치||0}`);
+      log('검사 C 실행…');
+      const rc = checkC(wb); log(`C: 전체 ${rc.summary?.전체||0}, 불일치 ${rc.summary?.불일치||0}`);
+      log('검사 D 실행…');
+      const rd = checkD(wb); log(`D: 전체 ${rd.summary?.전체||0}, 불일치 ${rd.summary?.불일치||0}`);
+      log('검사 E 실행…');
+      const re = checkE(wb); log(`E: 전체 ${re.summary?.전체||0}, 불일치 ${re.summary?.불일치||0}`);
 
       const resWb = buildResultWorkbook([ra,rb,rc,rd,re]);
       const outName = downloadWorkbook(resWb, file.name.replace(/\.[^.]+$/, '') + '_matchflag');
@@ -903,8 +902,6 @@ function checkD(wb){
     }
   };
 })();
-
-
 
 
 
