@@ -296,11 +296,16 @@
     return {sheet, row: parseInt(rowStr,10), count: bestN};
   }
 
-  // 시트 가져오기 by 이름(대소문자 무시형)
+  // 시트 가져오기 by 이름(대소문자 무시 + 공백무시)
   function getSheetCaseInsensitive(wb, name){
-    if (wb.SheetNames.includes(name)) return wb.Sheets[name];
-    const low = name.toLowerCase();
-    for (const sn of wb.SheetNames){ if (sn.toLowerCase()===low) return wb.Sheets[sn]; }
+    if (!wb || !wb.SheetNames) return null;
+    
+    const target = String(name || '').trim().toLowerCase();
+    for (const sn of wb.SheetNames){
+      if (sn && sn.trim().toLowerCase() === target){
+        return wb.Sheets[sn];
+      }
+    }
     return null;
   }
   // 일반화: 어떤 시트든 주어진 행의 '품명|규격' 키를 생성
@@ -902,6 +907,7 @@ function checkD(wb){
     }
   };
 })();
+
 
 
 
